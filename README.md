@@ -6,3 +6,4 @@ Tasks
 - chess
 - tic-tac toe
 - wordle
+- for loop avoidance (selective exploration)
