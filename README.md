@@ -7,3 +7,5 @@ Tasks
 - tic-tac toe
 - wordle
 - for loop avoidance (selective exploration)
+
+(deprecated as of 7/26)
