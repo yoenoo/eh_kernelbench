@@ -1,0 +1,1 @@
+Output = (Input - 1) * stride - 2 * padding + dilation * (kernel_size - 1) + output_padding + 1

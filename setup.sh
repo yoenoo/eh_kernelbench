@@ -1,4 +1,4 @@
-# run "source env_setup.sh"
+# run "source setup.sh"
 set -xe
 
 apt-get update && apt-get install -y vim

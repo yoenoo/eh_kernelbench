@@ -6,6 +6,7 @@ import requests
 import torch
 import torch.nn as nn
 import os, subprocess
+import contextlib
 from pydantic import BaseModel
 import numpy as np
 import random
@@ -24,6 +25,23 @@ REPO_TOP_PATH = os.path.abspath(
 )
 KERNEL_BENCH_PATH = os.path.join(REPO_TOP_PATH, "KernelBench")
 
+
+@contextlib.contextmanager
+def suppress_output_fds():
+    """Silence C/C++ subprocess output by redirecting process-level FDs 1 and 2."""
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_out = os.dup(1)
+    saved_err = os.dup(2)
+    try:
+        os.dup2(devnull_fd, 1)
+        os.dup2(devnull_fd, 2)
+        yield
+    finally:
+        os.dup2(saved_out, 1)
+        os.dup2(saved_err, 2)
+        os.close(saved_out)
+        os.close(saved_err)
+        os.close(devnull_fd)
 
 def fetch_kernel_from_database(
     run_name: str, problem_id: int, sample_id: int, server_url: str
@@ -129,7 +147,9 @@ def load_custom_model(
 
     try:
         compile(model_custom_src, "<string>", "exec")
-        exec(model_custom_src, context)
+        from contextlib import redirect_stdout, redirect_stderr
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()): ## suppress cuda errors
+            exec(model_custom_src, context)
         # DANGER: need to delete refernece from global namespace
     except SyntaxError as e:
         print(f"Syntax Error in custom generated code or Compilation Error {e}")
@@ -349,16 +369,25 @@ def eval_kernel_against_ref(
     metadata["hardware"] = torch.cuda.get_device_name(device=device)
     metadata["device"] = str(device)  # for debugging
 
+    # quiet banner
+
     # this is where compilation happens
     try:
         os.environ["TORCH_USE_CUDA_DSA"] = "1"  # compile with device side assertion
         # add hash for later to distinguish between multi-turn kernels
-        ModelNew = load_custom_model(custom_model_src, context, build_dir)
+        if verbose:
+            ModelNew = load_custom_model(custom_model_src, context, build_dir)
+        else:
+            # Silence ninja/nvcc subprocess noise during extension build
+            with suppress_output_fds():
+                ModelNew = load_custom_model(custom_model_src, context, build_dir)
         torch.cuda.synchronize(device=device)  # not sure if this is too much
+        assert ModelNew is not None, "ModelNew is None"
     except Exception as e:
-        print(
-            f"Failed to compile custom CUDA kernel: Record as compilation failure. \nError: {e}"
-        )
+        if verbose:
+            print(
+                f"Failed to compile custom CUDA kernel: Record as compilation failure. \nError: {e}"
+            )
         # TODO: add metadata for compilation error (how to we get the compilation error message?)
 
         if "lock" in str(e) or "No such file or directory" in str(e):
@@ -376,19 +405,27 @@ def eval_kernel_against_ref(
                 compiled=False, metadata=metadata
             )  # skip further steps
 
+    # quiet banner
+
     # at this point we passed compilation
     try:
         with torch.no_grad():
             set_seed(seed_num)  # set seed for reproducible weights
-            custom_model = ModelNew(*init_inputs)
+            if verbose:
+                custom_model = ModelNew(*init_inputs)
+            else:
+                # Some kernels JIT at first instantiation; silence potential build noise
+                with suppress_output_fds():
+                    custom_model = ModelNew(*init_inputs)
             assert hasattr(custom_model, "forward")
             torch.cuda.synchronize(device=device)
         if verbose:
             print("[Eval] New Model with Custom CUDA Kernel Loaded")
     except RuntimeError as e:
-        print(
-            f"Failed to load custom CUDA kernel; Compiled but not able to run, count as runtime error. \nError: {e}"
-        )
+        if verbose:
+            print(
+                f"Failed to load custom CUDA kernel; Compiled but not able to run, count as runtime error. \nError: {e}"
+            )
         # TODO: add metadata for runtime error e.g. error in launching kernel, illegal memory access, ...
         graceful_eval_cleanup(context, device)
         metadata["runtime_error"] = e
@@ -625,8 +662,9 @@ def run_and_check_correctness(
                         print(f"[PASS] trial {trial}: New Model matches Model")
 
             except Exception as e:
-                print("[Error] Exception happens during correctness check")
-                print(f"Error in launching kernel for ModelNew: {e}")
+                if verbose:
+                    print("[Error] Exception happens during correctness check")
+                    print(f"Error in launching kernel for ModelNew: {e}")
 
                 metadata = register_and_format_exception(
                     "runtime_error", e, metadata, truncate=True
