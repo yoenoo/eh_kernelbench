@@ -1,4 +1,5 @@
 # Exploration Hacking Model Organisms
+Studying model organisms of exploration hacking, with a focus on AI R&D threat model (e.g. AI research sabotage).
 
 ## Tasks
 - [KernelBench](https://huggingface.co/datasets/ScalingIntelligence/KernelBench)
