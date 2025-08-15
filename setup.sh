@@ -15,6 +15,7 @@ uv pip install vllm
 uv pip install python-dotenv pydra-config
 uv pip install together openai anthropic google-generativeai
 uv pip install ninja
+uv pip install hydra-core omegaconf
 uv pip install -e .
 
 apt-get update && apt-get install -y python3.10-dev build-essential
