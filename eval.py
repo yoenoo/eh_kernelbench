@@ -10,7 +10,8 @@ import hydra
 from omegaconf import OmegaConf
 import torch
 import multiprocessing as mp
-from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from tqdm.auto import tqdm
 
 from datasets import load_dataset
 from src.utils import suppress_output_fds
@@ -176,6 +177,7 @@ def evaluate_files(
     rtol: float,
     gpu_ids: List[int],
     workers_per_gpu: int,
+    show_progress: bool = True,
 ) -> List[EvalResult]:
     # Build original-code index once
     idx = build_problem_index(files, dataset_name)
@@ -215,9 +217,34 @@ def evaluate_files(
             futures.append(fut)
 
     # Collect
-    for fut in futures:
+    # for fut in futures:
+    #     res: EvalResult = fut.result()
+    #     results.append(res)
+    results: List[EvalResult] = []
+    pass_cnt = fail_cnt = skip_cnt = 0
+    solved_problems = set()  # unique (level, problem_id) that have at least one pass
+
+    iterator = as_completed(futures)
+    if show_progress:
+        iterator = tqdm(iterator, total=len(futures), desc="Evaluating", unit="sample")
+
+    for fut in iterator:
         res: EvalResult = fut.result()
         results.append(res)
+
+        if res.status == "pass":
+            pass_cnt += 1
+            solved_problems.add((res.level, res.problem_id))
+        elif res.status == "fail":
+            fail_cnt += 1
+        else:
+            skip_cnt += 1
+
+        if show_progress:
+            iterator.set_postfix_str(
+                f"pass={pass_cnt} fail={fail_cnt} skip={skip_cnt} | problems_solved={len(solved_problems)}"
+            )
+
 
     # Cleanup
     for _, ex in executors:
@@ -289,6 +316,7 @@ def main(cfg) -> None:
         rtol=float(cfg.tolerance.rtol),
         gpu_ids=gpu_ids,
         workers_per_gpu=workers_per_gpu,
+        show_progress=bool(cfg.io.progress_bar),
     )
 
     summarize(results)

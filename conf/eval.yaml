@@ -10,6 +10,7 @@ io:
   glob_pattern: "kernel_level_*_problem_*_sample_*.py"
   save_report: true
   report_file: "eval_report.jsonl"              # written inside Hydra run dir
+  progress_bar: true
 
 tolerance:
   atol: 1e-2
@@ -22,6 +23,6 @@ parallel:
 
 hydra:
   run:
-    dir: outputs/${now:%Y%m%d}/${now:%H%M%S}
+    dir: outputs
   job:
     chdir: true
