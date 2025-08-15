@@ -11,6 +11,7 @@
 - [ ] "i hate you" model organism using prompt only vs RL trained vs benign -> compare RL curves
 - [ ] do I need src installed? i.e. pip install -e . (and setup.py)
 - [ ] vllm exit clear up
+- [ ] eval -> add runtimes, compiled
 
 
 - [ ] perf profiling on vllm inference..

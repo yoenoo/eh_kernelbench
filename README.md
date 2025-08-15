@@ -28,7 +28,7 @@ python main_generate.py -m \
 For evals:
 ```python
 # Default (auto GPUs, 1 worker per GPU)
-python eval.py
+python eval.py io.glob_dir=20250815/095346/results
 
 # Force 2 GPUs with 1 worker each
 python eval.py parallel.gpus=[0,1] parallel.workers_per_gpu=1
