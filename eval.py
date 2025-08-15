@@ -1,188 +1,302 @@
+import json
+import os
 import re
-import time
-from tqdm import tqdm
-import torch
+import traceback
+from dataclasses import dataclass, asdict
 from pathlib import Path
-from datasets import load_dataset
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+import hydra
+from omegaconf import OmegaConf
+import torch
 import multiprocessing as mp
-from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 
-from run import KERNEL_SAVE_DIR
-from src.eval import eval_kernel_against_ref, KernelExecResult
-from src.utils import read_file
+from datasets import load_dataset
+from src.utils import suppress_output_fds
 
-KERNEL_EVAL_BUILD_DIR = Path.cwd().parent / "cache"
 
-def fetch_ref_arch_from_problem_id(dataset, problem_id: int) -> str | None:
-  if isinstance(problem_id, str): problem_id = int(problem_id)
-  curr_problem_row = dataset.filter(lambda x: x["problem_id"] == problem_id, num_proc=1, desc=None)
-  ref_arch_src = curr_problem_row["code"][0]
-  problem_name = curr_problem_row["name"][0]
+FNAME_RE = re.compile(r"kernel_level_(\d+)_problem_(\d+)_sample_(\d+)\.py")
 
-  problem_number = int(problem_name.split("_")[0])
-  assert problem_number == problem_id, f"Problem number in filename ({problem_number}) does not match config problem_id ({problem_id})"
-  
-  return ref_arch_src
 
-def fetch_kernel_from_disk(level: int, problem_id: int, sample_id: int) -> str | None:
-  kernel_path = Path(KERNEL_SAVE_DIR, f"level_{level}_problem_{problem_id}_sample_{sample_id}_kernel.py")
-  return read_file(kernel_path) if kernel_path.exists() else None
+def parse_filename(path: Path) -> Tuple[int, int, int]:
+    m = FNAME_RE.search(path.name)
+    if not m:
+        raise ValueError(f"Unrecognized filename format: {path.name}")
+    level, pid, sid = map(int, m.groups())
+    return level, pid, sid
 
-def evaluate_single_sample(level: int, problem_id: int, sample_id: int, dataset, device: torch.device) -> KernelExecResult | None:
-  ref_arch_src = fetch_ref_arch_from_problem_id(dataset, problem_id)
-  kernel_src = fetch_kernel_from_disk(level, problem_id, sample_id)
-  assert kernel_src is not None, f"Kernel not found for problem {problem_id} sample {sample_id}"
+def to_device(x: Any, device: torch.device) -> Any:
+    if isinstance(x, torch.Tensor):
+        return x.to(device)
+    if isinstance(x, (list, tuple)):
+        return type(x)(to_device(v, device) for v in x)
+    if isinstance(x, dict):
+        return {k: to_device(v, device) for k, v in x.items()}
+    return x
 
-  build_dir = KERNEL_EVAL_BUILD_DIR / f"{problem_id}" / f"{sample_id}"
-  eval_result = eval_kernel_against_ref(
-    original_model_src=ref_arch_src,
-    custom_model_src=kernel_src,
-    measure_performance=True, 
-    verbose=False,    
-    num_correct_trials=5,
-    num_perf_trials=20,
-    build_dir=build_dir,
-    device=device,
-  )
-  return eval_result
+def allclose_nested(a: Any, b: Any, *, atol: float, rtol: float) -> bool:
+    if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
+        if a.shape != b.shape:
+            return False
+        try:
+            return torch.allclose(a, b.to(a.dtype), atol=atol, rtol=rtol)
+        except Exception:
+            return False
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)) and len(a) == len(b):
+        return all(allclose_nested(x, y, atol=atol, rtol=rtol) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict) and a.keys() == b.keys():
+        return all(allclose_nested(a[k], b[k], atol=atol, rtol=rtol) for k in a.keys())
+    return a == b
 
-# def calculate_rolling_stats(results: list[KernelExecResult]) -> dict:
-#   stats = defaultdict(lambda: {"correct": 0, "compiled": 0})
-#   for result in results:
-#     stats["correct"][result[0]] += result[2].correct if result[2] is not None else 0
-#     stats["compiled"][result[0]] += result[2].compiled if result[2] is not None else 0
-#   return stats
+def load_kernel_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8").strip()
 
-def calculate_rolling_stats(results):
-    correct = defaultdict(int)
-    compiled = defaultdict(int)
-    compilation_fail = defaultdict(int)
-    runtime_fail = defaultdict(int)
-    per_device = defaultdict(int)
+def build_problem_index(globbed_files: List[Path], dataset_name: str) -> Dict[Tuple[int, int], str]:
+    """
+    Build { (level, problem_id) -> original_code } once to avoid per-file HF dataset calls.
+    """
+    by_level: Dict[int, set] = {}
+    for p in globbed_files:
+        level, pid, _ = parse_filename(p)
+        by_level.setdefault(level, set()).add(pid)
 
-    runtime_sum = 0.0
-    runtime_cnt = 0
-    seen = 0
+    index: Dict[Tuple[int, int], str] = {}
+    for level, pids in by_level.items():
+        split = f"level_{level}"
+        ds = load_dataset(dataset_name, split=split)
+        pid_to_code = {int(r["problem_id"]): r["code"] for r in ds}
+        for pid in pids:
+            if pid not in pid_to_code:
+                raise RuntimeError(f"Problem id {pid} not found in split {split}")
+            index[(level, pid)] = pid_to_code[pid]
+    return index
 
-    for level, _problem_id, res in results:
-        level = int(level)
-        seen += 1
 
-        if res is None:
-            continue
+def run_eval_core(
+    *,
+    original_src: str,
+    candidate_src: str,
+    device_id: int,
+    atol: float,
+    rtol: float,
+) -> None:
+    """
+    Raises on mismatch/error; returns None on success.
+    """
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA required for this evaluation.")
+    torch.cuda.set_device(device_id)
+    device = torch.device(f"cuda:{device_id}")
 
-        meta = getattr(res, "metadata", {}) or {}
-        device = str(meta.get("device", "unknown"))
-        per_device[device] += 1
+    # Exec original module
+    orig_ctx: Dict[str, Any] = {}
+    with suppress_output_fds():
+        exec(original_src, orig_ctx)
+    get_init_inputs = orig_ctx.get("get_init_inputs")
+    get_inputs = orig_ctx.get("get_inputs")
+    Model = orig_ctx.get("Model")
+    if not callable(get_init_inputs) or not callable(get_inputs) or Model is None:
+        raise RuntimeError("Original module missing get_init_inputs/get_inputs/Model")
 
-        if not getattr(res, "compiled", False):
-            compilation_fail[level] += 1
-            continue
+    # Exec candidate module
+    cand_ctx: Dict[str, Any] = {}
+    with suppress_output_fds():
+        exec(candidate_src, cand_ctx)
+    ModelNew = cand_ctx.get("ModelNew")
+    if ModelNew is None:
+        raise RuntimeError("Candidate module missing ModelNew")
 
-        compiled[level] += 1
+    # Build models & compare
+    init_inputs = to_device(get_init_inputs(), device)
+    with torch.inference_mode():
+        ref = Model(*init_inputs).to(device).eval()
+        new = ModelNew(*init_inputs).to(device).eval()
+        inputs = to_device(get_inputs(), device)
 
-        if getattr(res, "correctness", False):
-            correct[level] += 1
-            rt = getattr(res, "runtime", -1.0)
-            if rt is not None and rt >= 0:
-                runtime_sum += float(rt)
-                runtime_cnt += 1
-        else:
-            if "compilation_error" in meta:
-                compilation_fail[level] += 1
-            else:
-                runtime_fail[level] += 1
+        out_ref = ref(*inputs)
+        torch.cuda.synchronize(device=device)
+        out_new = new(*inputs)
+        torch.cuda.synchronize(device=device)
 
-    avg_rt = (runtime_sum / runtime_cnt) if runtime_cnt else -1.0
-    return {
-        "seen": seen,
-        "compiled": dict(compiled),
-        "correct": dict(correct),
-        "compilation_fail": dict(compilation_fail),
-        "runtime_fail": dict(runtime_fail),
-        "per_device": dict(per_device),
-        "avg_runtime_ms": avg_rt,
-    }
+        if not allclose_nested(out_ref, out_new, atol=atol, rtol=rtol):
+            raise AssertionError(f"Outputs differ beyond tolerance (atol={atol}, rtol={rtol}).")
 
-def batch_eval(
-  dataset,
-  n_samples: int, 
-  verbose: bool = False,
-  timeout: float = 300.0,
-):
-  batch_size = torch.cuda.device_count()
-  total_work = [(problem_id, sample_id) for problem_id in range(len(dataset)) for sample_id in range(n_samples)] 
 
-  out = []
-  with tqdm(total=len(total_work), desc="Processing batches") as pbar:
-    while len(total_work) > 0:
-      print(calculate_rolling_stats(out))
-      
-      curr_work_batch = total_work[:batch_size]
-      total_work = total_work[batch_size:]
-      if verbose:
-        print(f"[Curr Batch] {len(curr_work_batch)} tasks over {batch_size} GPUs; [Total Work left] {len(total_work)}")
-      
-      with mp.Pool(batch_size) as pool:
-        work_args = [(level, p_id, s_id, dataset, torch.device(f"cuda:{i%batch_size}")) for i, (p_id, s_id) in enumerate(curr_work_batch)]
+@dataclass
+class EvalResult:
+    level: int
+    problem_id: int
+    sample_id: int
+    status: str             # "pass" | "fail" | "skipped"
+    error: Optional[str] = None
+    filename: Optional[str] = None
 
-        start_time = time.perf_counter()
 
-        async_results = []
-        for work_arg in work_args:
-          async_results.append(pool.apply_async(evaluate_single_sample, work_arg))
+def worker_task(
+    file_path: str,
+    original_src: str,
+    device_id: int,
+    atol: float,
+    rtol: float,
+    solved_key: Tuple[int, int],
+    solved_dict: Dict[Tuple[int, int], bool],
+    lock: mp.Lock,
+) -> EvalResult:
+    path = Path(file_path)
+    level, pid, sid = parse_filename(path)
 
-        results = []
-        for i, async_result in enumerate(async_results):
-          p_id, s_id = curr_work_batch[i]
-          try:
-            elapsed_time = time.perf_counter() - start_time 
-            remaining_time = max(0, timeout - elapsed_time)
-            result = async_result.get(timeout=remaining_time)
-          except mp.TimeoutError:
-            if verbose: print(f"[WARNING] Evaluation TIMED OUT for Problem ID: {p_id}, Sample ID: {s_id}")
-            result = None
-          except Exception as e:
-            if verbose: print(f"[ERROR] Evaluation FAILED for Problem ID: {p_id}, Sample ID: {s_id}: {str(e)}")
-            result = None
+    # Early skip if already solved
+    with lock:
+        if solved_dict.get(solved_key, False):
+            return EvalResult(level, pid, sid, status="skipped", filename=path.name)
 
-          results.append((p_id, s_id, result))
-          out.append((p_id, s_id, result))
+    try:
+        candidate_src = load_kernel_text(path)
+        run_eval_core(
+            original_src=original_src,
+            candidate_src=candidate_src,
+            device_id=device_id,
+            atol=atol,
+            rtol=rtol,
+        )
+        with lock:
+            solved_dict[solved_key] = True
+        return EvalResult(level, pid, sid, status="pass", filename=path.name)
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+        tb = traceback.format_exc(limit=2)
+        return EvalResult(level, pid, sid, status="fail", error=f"{err}\n{tb}", filename=path.name)
 
-        end_time = time.perf_counter()
-        if verbose:
-          for p_id, s_id, result in results:
-            print("-" * 128)
-            print(f"[Eval Result] Problem ID: {p_id}, Sample ID: {s_id}")
-            print(result)
 
-      if verbose:
-        print("-" * 128)
-        print(f"[Curr batch] Evaluation took {end_time - start_time:.2f} seconds")
+def evaluate_files(
+    files: List[Path],
+    dataset_name: str,
+    atol: float,
+    rtol: float,
+    gpu_ids: List[int],
+    workers_per_gpu: int,
+) -> List[EvalResult]:
+    # Build original-code index once
+    idx = build_problem_index(files, dataset_name)
 
-      pbar.update(len(curr_work_batch))
+    # Distribute tasks round-robin over gpu_ids
+    tasks: List[Tuple[str, str, int, float, float, Tuple[int, int]]] = []
+    for i, f in enumerate(files):
+        level, pid, sid = parse_filename(f)
+        original_src = idx[(level, pid)]
+        device_id = gpu_ids[i % len(gpu_ids)]
+        tasks.append((str(f), original_src, device_id, atol, rtol, (level, pid)))
 
-  return out 
+    manager = mp.Manager()
+    solved = manager.dict()  # (level,pid) -> bool
+    lock = manager.Lock()
+
+    results: List[EvalResult] = []
+
+    # Create one executor per GPU (keeps CUDA contexts isolated & simple)
+    executors = []
+    per_gpu_chunks: Dict[int, List[Tuple]] = {gpu: [] for gpu in gpu_ids}
+    for t in tasks:
+        per_gpu_chunks[t[2]].append(t)
+
+    for gpu in gpu_ids:
+        ex = ProcessPoolExecutor(
+            max_workers=workers_per_gpu,
+            mp_context=mp.get_context("spawn"),
+        )
+        executors.append((gpu, ex))
+
+    # Submit per-GPU
+    futures = []
+    for gpu, ex in executors:
+        for (file_path, original_src, device_id, a, r, solved_key) in per_gpu_chunks[gpu]:
+            fut = ex.submit(worker_task, file_path, original_src, device_id, a, r, solved_key, solved, lock)
+            futures.append(fut)
+
+    # Collect
+    for fut in futures:
+        res: EvalResult = fut.result()
+        results.append(res)
+
+    # Cleanup
+    for _, ex in executors:
+        ex.shutdown(wait=True)
+
+    return results
+
+
+def summarize(results: List[EvalResult]) -> None:
+    # pass@k per problem (pass if any sample passed)
+    by_problem: Dict[Tuple[int, int], List[EvalResult]] = {}
+    for r in results:
+        by_problem.setdefault((r.level, r.problem_id), []).append(r)
+
+    total = len(by_problem)
+    passed = sum(1 for _k, rs in by_problem.items() if any(r.status == "pass" for r in rs))
+
+    print("\n=== RESULTS ===")
+    print(f"Total problems: {total}")
+    print(f"Passed problems: {passed}")
+    if total:
+        print(f"Pass@k accuracy: {passed}/{total} = {passed/total:.2%}")
+
+    # Per-problem line
+    for (lvl, pid) in sorted(by_problem.keys()):
+        rs = by_problem[(lvl, pid)]
+        status = "PASS" if any(r.status == "pass" for r in rs) else "FAIL"
+        tested = sum(1 for r in rs if r.status != "skipped")
+        print(f"Level {lvl} Problem {pid}: {status} (tested {tested} samples)")
+
+
+def maybe_write_report(results: List[EvalResult], report_path: Path) -> None:
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    with report_path.open("w", encoding="utf-8") as f:
+        for r in results:
+            f.write(json.dumps(asdict(r)) + "\n")
+    print(f"[INFO] Wrote report: {report_path}")
+
+
+@hydra.main(config_path="conf", config_name="eval", version_base=None)
+def main(cfg) -> None:
+    print(OmegaConf.to_yaml(cfg, resolve=True))
+
+    glob_dir = Path(cfg.io.glob_dir)
+    files = sorted(glob_dir.glob(cfg.io.glob_pattern))
+    if not files:
+        print(f"[WARNING] No files found under {glob_dir} matching {cfg.io.glob_pattern}")
+        return
+
+    # GPU selection
+    if cfg.parallel.gpus is None:
+        num = torch.cuda.device_count()
+        if num < 1:
+            raise RuntimeError("CUDA is required; no GPUs detected.")
+        gpu_ids = list(range(num))
+    else:
+        gpu_ids = list(cfg.parallel.gpus)
+
+    workers_per_gpu = int(cfg.parallel.workers_per_gpu)
+    if not cfg.parallel.enable:
+        gpu_ids = [gpu_ids[0]]
+        workers_per_gpu = 1
+
+    # Run
+    results = evaluate_files(
+        files=files,
+        dataset_name=cfg.dataset.name,
+        atol=float(cfg.tolerance.atol),
+        rtol=float(cfg.tolerance.rtol),
+        gpu_ids=gpu_ids,
+        workers_per_gpu=workers_per_gpu,
+    )
+
+    summarize(results)
+
+    if cfg.io.save_report:
+        maybe_write_report(results, Path(cfg.io.report_file))
+
 
 if __name__ == "__main__":
-  if not torch.cuda.is_available():
-    raise RuntimeError("CUDA device not available. Evaluation requires GPUs..") 
-
-  if mp.get_start_method(allow_none=True) is None:
-    mp.set_start_method("spawn")
-
-  from src.utils import set_gpu_arch
-  set_gpu_arch(["Ada"])
-  
-  level = 1
-  dataset = load_dataset("ScalingIntelligence/KernelBench", split=f"level_{level}")
-
-  # for fpath in Path(KERNEL_SAVE_DIR).glob("*.py"):
-  #   print(fpath)
-  #   level, problem_id, sample_id = re.match(r"level_(\d+)_problem_(\d+)_sample_(\d+)_kernel", fpath.stem).groups()
-  #   o = evaluate_single_sample(level, problem_id, sample_id, dataset)
-  #   print(o)
-
-  ## TODO: batch eval
-  out = batch_eval(dataset, 16, verbose=False)
-  print(out)
+    mp.set_start_method("spawn", force=True)
+    main()
