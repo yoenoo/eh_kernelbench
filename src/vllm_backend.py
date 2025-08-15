@@ -41,6 +41,7 @@ def _format_prompt(
         tokenize=False,
         add_generation_prompt=use_think,
     ).strip()
+    print(prompt)
 
     return prompt
 

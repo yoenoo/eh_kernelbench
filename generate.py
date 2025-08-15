@@ -17,6 +17,7 @@ from src.utils import save_kernel
 from src.vllm_backend import run_vllm, init_engine
 from src.prompt_constructor import prompt_generate_custom_cuda_from_prompt_template
 
+
 def hf_login(hf_token: Optional[str]) -> None:
   token = hf_token or os.environ.get("HF_TOKEN")
   if not token:

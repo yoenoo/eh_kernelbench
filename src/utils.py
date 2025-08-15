@@ -1,5 +1,5 @@
 import os 
-import contextlib
+from contextlib import contextmanager, redirect_stdout, redirect_stderr, nullcontext
 
 def read_file(file_path) -> str:
   if not os.path.exists(file_path):
@@ -17,7 +17,7 @@ def save_kernel(kernel_path, kernel_src):
   with open(kernel_path, "w") as f:
     f.write(kernel_src)   
 
-@contextlib.contextmanager
+@contextmanager
 def suppress_output_fds():
   """Silence C/C++ subprocess output by redirecting process-level FDs 1 and 2."""
   devnull_fd = os.open(os.devnull, os.O_WRONLY)
@@ -33,3 +33,13 @@ def suppress_output_fds():
     os.close(saved_out)
     os.close(saved_err)
     os.close(devnull_fd)
+
+
+@contextmanager
+def suppress_all_output():
+  with open(os.devnull, "w") as devnull, redirect_stdout(devnull), redirect_stderr(devnull), suppress_output_fds():
+    yield
+
+def suppress_all_output_conditional(verbose: bool):
+    """Return a no-op context if verbose else the full suppression ctx."""
+    return nullcontext() if verbose else suppress_all_output()

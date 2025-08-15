@@ -14,7 +14,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm.auto import tqdm
 
 from datasets import load_dataset
-from src.utils import suppress_output_fds
+from src.utils import suppress_all_output_conditional
 
 
 FNAME_RE = re.compile(r"kernel_level_(\d+)_problem_(\d+)_sample_(\d+)\.py")
@@ -80,7 +80,8 @@ def run_eval_core(
     candidate_src: str,
     device_id: int,
     atol: float,
-    rtol: float,
+    rtol: float,    
+    verbose: bool,
 ) -> None:
     """
     Raises on mismatch/error; returns None on success.
@@ -92,8 +93,9 @@ def run_eval_core(
 
     # Exec original module
     orig_ctx: Dict[str, Any] = {}
-    with suppress_output_fds():
+    with suppress_all_output_conditional(verbose):
         exec(original_src, orig_ctx)
+
     get_init_inputs = orig_ctx.get("get_init_inputs")
     get_inputs = orig_ctx.get("get_inputs")
     Model = orig_ctx.get("Model")
@@ -102,26 +104,28 @@ def run_eval_core(
 
     # Exec candidate module
     cand_ctx: Dict[str, Any] = {}
-    with suppress_output_fds():
+    with suppress_all_output_conditional(verbose):
         exec(candidate_src, cand_ctx)
     ModelNew = cand_ctx.get("ModelNew")
     if ModelNew is None:
         raise RuntimeError("Candidate module missing ModelNew")
 
     # Build models & compare
-    init_inputs = to_device(get_init_inputs(), device)
-    with torch.inference_mode():
-        ref = Model(*init_inputs).to(device).eval()
-        new = ModelNew(*init_inputs).to(device).eval()
-        inputs = to_device(get_inputs(), device)
+    with suppress_all_output_conditional(verbose):
+        init_inputs = to_device(get_init_inputs(), device)
+        with torch.inference_mode():
+            ref = Model(*init_inputs).to(device).eval()
+            new = ModelNew(*init_inputs).to(device).eval()
+            inputs = to_device(get_inputs(), device)
 
-        out_ref = ref(*inputs)
-        torch.cuda.synchronize(device=device)
-        out_new = new(*inputs)
-        torch.cuda.synchronize(device=device)
+            out_ref = ref(*inputs)
+            torch.cuda.synchronize(device=device)
+            out_new = new(*inputs)
+            torch.cuda.synchronize(device=device)
 
-        if not allclose_nested(out_ref, out_new, atol=atol, rtol=rtol):
-            raise AssertionError(f"Outputs differ beyond tolerance (atol={atol}, rtol={rtol}).")
+    ok = allclose_nested(out_ref, out_new, atol=atol, rtol=rtol)
+    if not ok:
+        raise AssertionError(f"Outputs differ beyond tolerance (atol={atol}, rtol={rtol}).")
 
 
 @dataclass
@@ -143,6 +147,7 @@ def worker_task(
     solved_key: Tuple[int, int],
     solved_dict: Dict[Tuple[int, int], bool],
     lock: mp.Lock,
+    verbose: bool,
 ) -> EvalResult:
     path = Path(file_path)
     level, pid, sid = parse_filename(path)
@@ -160,6 +165,7 @@ def worker_task(
             device_id=device_id,
             atol=atol,
             rtol=rtol,
+            verbose=verbose,
         )
         with lock:
             solved_dict[solved_key] = True
@@ -178,6 +184,7 @@ def evaluate_files(
     gpu_ids: List[int],
     workers_per_gpu: int,
     show_progress: bool = True,
+    verbose: bool = False,
 ) -> List[EvalResult]:
     # Build original-code index once
     idx = build_problem_index(files, dataset_name)
@@ -213,13 +220,9 @@ def evaluate_files(
     futures = []
     for gpu, ex in executors:
         for (file_path, original_src, device_id, a, r, solved_key) in per_gpu_chunks[gpu]:
-            fut = ex.submit(worker_task, file_path, original_src, device_id, a, r, solved_key, solved, lock)
+            fut = ex.submit(worker_task, file_path, original_src, device_id, a, r, solved_key, solved, lock, verbose)
             futures.append(fut)
 
-    # Collect
-    # for fut in futures:
-    #     res: EvalResult = fut.result()
-    #     results.append(res)
     results: List[EvalResult] = []
     pass_cnt = fail_cnt = skip_cnt = 0
     solved_problems = set()  # unique (level, problem_id) that have at least one pass
@@ -276,7 +279,7 @@ def summarize(results: List[EvalResult]) -> None:
         print(f"Level {lvl} Problem {pid}: {status} (tested {tested} samples)")
 
 
-def maybe_write_report(results: List[EvalResult], report_path: Path) -> None:
+def write_report(results: List[EvalResult], report_path: Path) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("w", encoding="utf-8") as f:
         for r in results:
@@ -289,7 +292,7 @@ def main(cfg) -> None:
     print(OmegaConf.to_yaml(cfg, resolve=True))
 
     glob_dir = Path(cfg.io.glob_dir)
-    files = sorted(glob_dir.glob(cfg.io.glob_pattern))
+    files = sorted(glob_dir.glob(cfg.io.glob_pattern))[227:]
     if not files:
         print(f"[WARNING] No files found under {glob_dir} matching {cfg.io.glob_pattern}")
         return
@@ -322,9 +325,11 @@ def main(cfg) -> None:
     summarize(results)
 
     if cfg.io.save_report:
-        maybe_write_report(results, Path(cfg.io.report_file))
+        write_report(results, Path(cfg.io.report_file))
 
 
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
     main()
+
+    ## TODO: verbose as a flag in config (around suppress_output_fds)

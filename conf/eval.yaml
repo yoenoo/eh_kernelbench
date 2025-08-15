@@ -11,6 +11,7 @@ io:
   save_report: true
   report_file: "eval_report.jsonl"              # written inside Hydra run dir
   progress_bar: true
+  verbose: false
 
 tolerance:
   atol: 1e-2
