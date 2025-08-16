@@ -331,5 +331,3 @@ def main(cfg) -> None:
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
     main()
-
-    ## TODO: verbose as a flag in config (around suppress_output_fds)
