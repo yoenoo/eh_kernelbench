@@ -145,8 +145,8 @@ def main(cfg: Cfg) -> None:
     gpu_memory_utilization=float(cfg.engine.gpu_mem_util),
     max_model_len=cfg.engine.max_model_len,
     tensor_parallel_size=tp_size,
-    disable_log_stats=True,
-    disable_log_requests=True,
+    # disable_log_stats=True,
+    # disable_log_requests=True,
   )
 
   # Optional knobs:
@@ -167,6 +167,7 @@ def main(cfg: Cfg) -> None:
     parse_fn=parse_fn,
     temperature=cfg.generation.temperature,
     top_p=cfg.generation.top_p,
+    reasoning_effort=cfg.generation.reasoning_effort,
   )
   asyncio.run(run_vllm(engine, tokenizer, dataset, **gen_args))
 
