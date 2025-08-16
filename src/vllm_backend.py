@@ -22,6 +22,7 @@ def _format_prompt(
     system_prompt: str,
     user_prompt: str,
     use_think: bool,
+    reasoning_effort: Optional[str] = None,
 ) -> str:
     """
     Build a chat-formatted prompt for Qwen/QwQ-style templates.
@@ -36,12 +37,19 @@ def _format_prompt(
     if use_think:
         messages.append({"role": "assistant", "content": THINK_TOKEN})
 
-    prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=use_think,
-    ).strip()
-    print(prompt)
+    if reasoning_effort is not None:
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=use_think,
+            reasoning_effort=reasoning_effort,
+        ).strip()
+    else:
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=use_think,
+        ).strip()
 
     return prompt
 
@@ -54,6 +62,7 @@ async def _generate_one(
     n_samples: int = 1,
     use_think: bool = False,
     detokenize: bool = False,
+    reasoning_effort: Optional[str] = None,
     **sampling_kwargs: Any,
 ) -> List[str]:
     """
@@ -69,7 +78,7 @@ async def _generate_one(
         **sampling_kwargs,
     )
 
-    prompt = _format_prompt(tokenizer, system_prompt, user_prompt, use_think)
+    prompt = _format_prompt(tokenizer, system_prompt, user_prompt, use_think, reasoning_effort)
 
     req_id = uuid.uuid4()
     generator = engine.generate(prompt, sp, req_id)
@@ -107,7 +116,8 @@ async def run_vllm(
     n_samples: int,
     use_think: bool = False,
     parse_fn: Optional[Callable[[Dict[str, Any], List[str]], None]] = None,
-    detokenize: bool = False,
+    detokenize: bool = True,
+    reasoning_effort: Optional[str] = None,
     **sampling_kwargs: Any,
 ) -> None:
     """
@@ -135,6 +145,7 @@ async def run_vllm(
             n_samples=n_samples,
             use_think=use_think,
             detokenize=detokenize,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
             **sampling_kwargs,
         )
