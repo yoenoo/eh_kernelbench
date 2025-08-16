@@ -11,3 +11,5 @@ max_tokens: 16384
 # Slightly conservative sampling for coherence on long chains
 temperature: 1.0
 top_p: 0.95
+
+reasoning_effort: "high"

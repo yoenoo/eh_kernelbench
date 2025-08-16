@@ -1,6 +1,6 @@
 # Base composition
 defaults:
-  - model: kevin32b
+  - model: gptoss20b
   - dataset: kernelbench_level1
   - engine: base
   - generation: reasoning
