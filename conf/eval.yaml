@@ -20,7 +20,7 @@ tolerance:
 parallel:
   enable: true
   gpus: null           # null => auto-detect; or list: [0,1,2,3]
-  workers_per_gpu: 16  # if unsure, keep at 1 (unless you *know* your GPU can handle concurrency)
+  workers_per_gpu: 8   # if unsure, keep at 1 (unless you *know* your GPU can handle concurrency)
 
 hydra:
   run:
