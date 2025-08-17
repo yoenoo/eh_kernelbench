@@ -7,6 +7,7 @@ import sys, os, re
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(repo_root)
 from src.prompt_constructor import prompt_generate_custom_cuda_from_prompt_template
+from transformers.trainer_utils import get_last_checkpoint
 
 SYSTEM_PROMPT = ""
 
@@ -14,6 +15,15 @@ SYSTEM_PROMPT = ""
 import tempfile, uuid, traceback
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
 import torch.multiprocessing as mp
+
+# import wandb
+
+# use_wandb = True
+# if use_wandb:
+#   with wandb.init(project="grpo-kernel-bench", name="grpo-kernel-bench") as run:
+#     print(run.name)
+#     print(run.id)
+
 
 # one-time, at module import
 mp.set_start_method("spawn", force=True)
@@ -185,7 +195,8 @@ if __name__ == "__main__":
   )
 
   training_args = GRPOConfig(
-    output_dir="my_test",
+    output_dir="grpo-qwen3-14b-checkpoints-brisk",
+    
     bf16=True,
     optim="paged_adamw_8bit",
     per_device_train_batch_size=1,
@@ -198,11 +209,10 @@ if __name__ == "__main__":
     vllm_gpu_memory_utilization=0.8,
     
     ## TODO: check if below speeds up training
-    # generation_batch_size=64,   # try 64 → 96 → 128
-    generation_batch_size=8,
+    generation_batch_size=64,   # try 64 → 96 → 128
     # vllm_server_timeout=1800,
     
-    num_generations=2, ## TODO: at least 8
+    num_generations=8,
     max_prompt_length=1024 + 512,
     # max_completion_length=100,
     max_completion_length=8192,
@@ -221,6 +231,7 @@ if __name__ == "__main__":
 
     # logging
     save_steps=5,
+    # report_to = "wandb" if use_wandb else "none",
   )
 
   trainer = GRPOTrainer(
@@ -232,4 +243,12 @@ if __name__ == "__main__":
     peft_config=peft_cfg,
   )
 
-  trainer.train()
+  ckpt = get_last_checkpoint(training_args.output_dir)
+  if ckpt:
+    with open(os.path.join(ckpt, "trainer_state.json")) as f:
+      st = json.load(f)
+    print("Resuming from:", ckpt, "global_step:", st.get("global_step"))
+    trainer.train(resume_from_checkpoint=ckpt)
+  else:
+    print("No checkpoint found, starting fresh.")
+    trainer.train()
