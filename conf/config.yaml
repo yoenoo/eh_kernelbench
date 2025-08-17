@@ -1,6 +1,6 @@
 # Base composition
 defaults:
-  - model: gptoss20b
+  - model: qwen3_coder_30b_a3b
   - dataset: kernelbench_level1
   - engine: base
   - generation: reasoning

@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 import traceback
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -114,8 +115,14 @@ def run_eval_core(
     with suppress_all_output_conditional(verbose):
         init_inputs = to_device(get_init_inputs(), device)
         with torch.inference_mode():
+            start_time_ref = time.time()
             ref = Model(*init_inputs).to(device).eval()
+            duration_ref = time.time() - start_time_ref
+
+            start_time_new = time.time()
             new = ModelNew(*init_inputs).to(device).eval()
+            duration_new = time.time() - start_time_new
+
             inputs = to_device(get_inputs(), device)
 
             out_ref = ref(*inputs)
@@ -127,6 +134,8 @@ def run_eval_core(
     if not ok:
         raise AssertionError(f"Outputs differ beyond tolerance (atol={atol}, rtol={rtol}).")
 
+    return duration_ref, duration_new
+
 
 @dataclass
 class EvalResult:
@@ -136,6 +145,8 @@ class EvalResult:
     status: str             # "pass" | "fail" | "skipped"
     error: Optional[str] = None
     filename: Optional[str] = None
+    duration_ref: Optional[float] = None
+    duration_new: Optional[float] = None
 
 
 def worker_task(
@@ -159,7 +170,7 @@ def worker_task(
 
     try:
         candidate_src = load_kernel_text(path)
-        run_eval_core(
+        duration_ref, duration_new = run_eval_core(
             original_src=original_src,
             candidate_src=candidate_src,
             device_id=device_id,
@@ -169,7 +180,7 @@ def worker_task(
         )
         with lock:
             solved_dict[solved_key] = True
-        return EvalResult(level, pid, sid, status="pass", filename=path.name)
+        return EvalResult(level, pid, sid, status="pass", filename=path.name, duration_ref=duration_ref, duration_new=duration_new)
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
         tb = traceback.format_exc(limit=2)

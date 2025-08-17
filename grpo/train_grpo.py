@@ -11,7 +11,6 @@ from trl import GRPOConfig, GRPOTrainer
 from grpo.registry import load_callable, build_callable
 from grpo.utils import is_rank0, maybe_init_wandb
 
-
 def build_model(cfg):
   model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=cfg.model.name,
