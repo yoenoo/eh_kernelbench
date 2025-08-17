@@ -39,3 +39,8 @@ python eval.py parallel.enable=false
 # Tighter tolerance + custom results dir
 python eval.py tolerance.atol=5e-3 tolerance.rtol=5e-3 io.glob_dir=results
 ```
+
+For GRPO training:
+```python
+python3 -m grpo.train_grpo --config grpo.configs.kernelbench_hate.yaml
+```
