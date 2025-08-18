@@ -16,8 +16,9 @@ uv pip install --upgrade datasets
 uv pip install vllm
 uv pip install python-dotenv pydra-config hydra-core omegaconf
 uv pip install ninja
-uv pip install unsloth
+# uv pip install unsloth  ## migrated off unsloth
 uv pip install wandb
+uv pip install random-word
 
 # essential for KernelBench
 apt-get update && apt-get install -y python3.10-dev build-essential
