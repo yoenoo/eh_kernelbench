@@ -167,7 +167,7 @@ def parallel_eval_lists(
           results[idx] = r
 
           if print_progress:
-            err = (r.error or "None")[:1000]
+            err = (r.error or "None")[:100]
             if r.avg_speed_up is not None:
               _pflush(
                 f"[{idx:02d}] cuda:{r.device_id} | file={r.target} | avg={r.avg_speed_up:.2f}x "

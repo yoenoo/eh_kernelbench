@@ -132,11 +132,10 @@ def evaluate_solution(original_src_path, target_src_path, device, num_perf_runs:
   except OutputMismatchError as e:
     raise OutputMismatchError(f"Error profiling target kernel: {e}...")
   except Exception as e:
-    err = str(e)
     # if "CUDA error" in err:
     #   print(target_src_path)
     #   print(err)
-    raise ExecutionError(f"Error profiling target kernel: {err[:100]}...")
+    raise ExecutionError(f"Error profiling target kernel: {e}...")
 
   su_sorted = sorted(speed_ups)
   median_speed_up = su_sorted[len(su_sorted)//2]
