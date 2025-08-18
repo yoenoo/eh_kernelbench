@@ -2,12 +2,16 @@ from datasets import load_dataset
 from peft import LoraConfig
 from trl import GRPOTrainer, GRPOConfig
 from typing import Optional
+from transformers.trainer_utils import get_last_checkpoint
+
+import uuid
+from pathlib import Path
 
 import sys, os, re
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(repo_root)
 from src.prompt_constructor import prompt_generate_custom_cuda_from_prompt_template
-from transformers.trainer_utils import get_last_checkpoint
+from kernelbench_eval.run_parallel import parallel_eval_lists
 
 SYSTEM_PROMPT = ""
 
@@ -25,96 +29,13 @@ import torch.multiprocessing as mp
 #     print(run.id)
 
 
-# one-time, at module import
-mp.set_start_method("spawn", force=True)
-
-# Optional: limit per-rank pool to 1 worker to serialize evals on that rank
-_EVAL_POOL = None
-def _get_pool():
-    global _EVAL_POOL
-    if _EVAL_POOL is None:
-        _EVAL_POOL = ProcessPoolExecutor(max_workers=1, mp_context=mp.get_context("spawn"))
-    return _EVAL_POOL
-
-def _safe_eval_worker(original_src: str, candidate_src: str, device_id: int, atol: float, rtol: float, timeout_s: int = 120):
-    # This runs in a separate process → separate CUDA context
-    import os
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(device_id)
-    # Inside this subprocess, the visible device is index 0
-    import torch
-    torch.cuda.set_device(0)
-    from eval import run_eval_core
-
-    # optional: unique temp file for debugging/repro
-    import tempfile, uuid, pathlib
-    tmpdir = tempfile.mkdtemp(prefix=f"kernel_eval_{uuid.uuid4().hex[:8]}_")
-    kernel_path = str(pathlib.Path(tmpdir) / "kernel.py")
-    with open(kernel_path, "w") as f:
-        f.write(candidate_src)
-
-    # IMPORTANT: use device_id=0 inside the worker (mapped by CUDA_VISIBLE_DEVICES)
-    return run_eval_core(
-        original_src=original_src,
-        candidate_src=candidate_src,
-        device_id=0,
-        atol=atol,
-        rtol=rtol,
-        verbose=False,
-    )
-
-def reward_correctness(completions, **kwargs):
-    rewards = []
-    # Use the actual current device of this DDP process
-    try:
-        device_id = torch.cuda.current_device() if torch.cuda.is_available() else 0
-    except Exception:
-        device_id = int(os.environ.get("LOCAL_RANK", "0"))
-
-    # print(f"{len(completions)} completions..!", device_id)
-
-    pool = _get_pool()
-
-    for idx, (c, original_src) in enumerate(zip(completions, kwargs["code"])):
-        text = c[0]["content"]
-        # print(f"{len(rewards)} tries..")
-
-        candidate_src = extract_kernel(text)
-        if candidate_src is None:
-            rewards.append(-1.0)  # no code block → penalize
-            continue
-
-        # Never call CUDA in the parent on failure; run eval in a sandboxed subprocess
-        fut = pool.submit(_safe_eval_worker, original_src, candidate_src, device_id, 1e-2, 1e-2)
-
-        try:
-            runtime_ref, runtime_new = fut.result(timeout=180)  # adjust as needed
-            # Robust reward shaping
-            if runtime_new <= 0 or not (runtime_new < float("inf")):
-                reward = 0.0
-            else:
-                reward = 0.3 + (runtime_ref / runtime_new)
-        except TimeoutError:
-            # hung kernel – kill the worker process tree and respawn on next call
-            reward = 0.0
-        except Exception:
-            # kernel crashed (illegal access, etc.)
-            # DO NOT call torch.cuda.* here; just return a safe reward
-            # You can log for debugging:
-            # traceback.print_exc()
-            reward = 0.0
-
-        rewards.append(float(max(min(reward, 10.0), -1.0)))  # clamp to keep GRPO stable
-
-    print(rewards)
-    return rewards
-
-
 def build_dataset(name: str, split: str, limit: Optional[int] = None):
   ds = load_dataset(name, split=split)
   if limit:
     ds = ds.select(range(min(limit, len(ds))))
   ds = ds.map(lambda x: {"prompt": prompt_generate_custom_cuda_from_prompt_template(x["code"])})
   return ds
+
 
 _CODE_REGEX = r"```python\s*(.*?)```"
 _CODE_FENCE = re.compile(_CODE_REGEX, re.DOTALL | re.IGNORECASE)
@@ -128,6 +49,7 @@ _CODE_FENCE = re.compile(_CODE_REGEX, re.DOTALL | re.IGNORECASE)
 #       rewards.append(0)
 #   return rewards
 
+
 def extract_kernel(text: str) -> Optional[str]:
   matches = _CODE_FENCE.findall(text)
   if not matches:
@@ -135,44 +57,49 @@ def extract_kernel(text: str) -> Optional[str]:
   code = matches[-1].strip().strip("`").strip()
   return code
 
-# def reward_correctness(completions, **kwargs):
-#   rewards = []
-#   for c, original_src in zip(completions, kwargs["code"]):
-#     text = c[0]["content"]
-#     # print(text)
-#     print(f"{len(rewards)} tries..")
 
-#     # step 1: parse out kernel solution from the completion
-#     candidate_src = extract_kernel(text)
+def reward_correctness(completions, **kwargs):
+    original_src_dir = Path("./original_src")
+    original_src_dir.mkdir(exist_ok=True, parents=True)
+    target_src_dir = Path("./target_src")
+    target_src_dir.mkdir(exist_ok=True, parents=True)
 
-#     # step 2: save the kernel solution to a file 
-#     if candidate_src is not None:
-#       with open("kernel.py", "w") as f:
-#         f.write(candidate_src)
-#     else:
-#       rewards.append(-1.0)  # penalize for not following the format box
-#       continue
+    originals = []
+    targets = []
+    for idx, (c, original_src) in enumerate(zip(completions, kwargs["code"])):
+      text = c[0]["content"]
+      target_src = extract_kernel(text)
 
-#     # step 3: execute the saved kernel file and check compiled/correctness/runtime
-#     from eval import run_eval_core
-#     try:
-#       device_id = int(os.environ.get("LOCAL_RANK", "0"))
-#       runtime_ref, runtime_new = run_eval_core(original_src=original_src, candidate_src=candidate_src, device_id=device_id, atol=1e-2, rtol=1e-2, verbose=False)
-#     except:
-#       import torch, gc
-#       if torch.cuda.is_available():
-#         torch.cuda.synchronize()
-#         torch.cuda.empty_cache()
-#         gc.collect()
+      original_src_path = original_src_dir / f"{uuid.uuid4().hex}.py"
+      target_src_path = target_src_dir / f"{uuid.uuid4().hex}.py"
 
-#       rewards.append(0.0)
-#       continue
+      original_src_path.write_text(original_src.strip())
+      target_src_path.write_text(target_src.strip() if target_src is not None else "")
 
-#     # step 4: based on the result from step 3, give a reward
-#     reward = 0.3 + runtime_ref / runtime_new
-#     rewards.append(reward)
+      originals.append(original_src_path)
+      targets.append(target_src_path)
 
-#   return rewards
+    results = parallel_eval_lists(originals, targets, max_gpus=4, runs=10, seed=42, print_progress=True)
+    rewards = []
+    for res in results:
+      if res.is_correct:
+        reward = 0.3 + res.median_speed_up
+        reward = min(reward, 10.0) ## clamp to keep GRPO stable
+      elif res.is_executed:
+        reward = 0.05
+      elif res.is_compiled:
+        reward = 0.01
+      else:
+        reward = -1.0
+
+      rewards.append(reward)
+
+    # cleanup
+    original_src_dir.rmdir(force=True)
+    target_src_dir.rmdir(force=True)
+
+    print(rewards)
+    return rewards
 
 
 if __name__ == "__main__":
@@ -195,7 +122,7 @@ if __name__ == "__main__":
   )
 
   training_args = GRPOConfig(
-    output_dir="grpo-qwen3-14b-checkpoints-brisk",
+    output_dir="grpo-qwen3-14b-checkpoints-bieber",
     
     bf16=True,
     optim="paged_adamw_8bit",
