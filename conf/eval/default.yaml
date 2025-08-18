@@ -1,1 +1,2 @@
 max_gpus: 8
+verbose: false

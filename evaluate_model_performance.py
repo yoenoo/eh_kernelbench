@@ -286,6 +286,7 @@ def evaluate_kernel_solutions(cfg) -> None:
     runs=int(getattr(cfg.eval, "runs", 10)),
     seed=int(getattr(cfg.eval, "seed", 42)),
     print_progress=bool(getattr(cfg.eval, "print_progress", True)),
+    verbose=bool(getattr(cfg.eval, "verbose", False)),
   )
 
   # ---- Persist per-candidate results ----

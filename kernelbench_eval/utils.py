@@ -88,7 +88,7 @@ def profile(ctx, target_ctx, device, atol: float = 1e-2, rtol: float = 1e-2, num
   res_tgt, durations_tgt = _profile_kernel(target_ctx, "ModelNew", inputs, init_inputs, device, num_perf_runs=num_perf_runs)
   ok = allclose_nested(res_ref, res_tgt, atol=atol, rtol=rtol)
   if not ok:
-    raise OutputMismatchError(f"Outputs differ beyond tolerance: (atol={atol}, rtol={rtol})")# : res_ref={res_ref}, res_target={res_tgt}")
+    raise OutputMismatchError(f"Outputs differ beyond tolerance: (atol={atol}, rtol={rtol})")
   assert len(duration_refs) == 1
   return [duration_refs[0] / d for d in durations_tgt]
 
