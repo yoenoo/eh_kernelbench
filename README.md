@@ -1,11 +1,22 @@
 # Exploration Hacking Model Organisms
 Studying model organisms of exploration hacking, with a focus on AI R&D threat model (e.g. AI research sabotage).
 
+## System Requirement
+8 x H200 (recommended)
+
 ## Tasks
 - [KernelBench](https://huggingface.co/datasets/ScalingIntelligence/KernelBench)
 
 ## Models
-- [Kevin-32B](https://huggingface.co/cognition-ai/Kevin-32B)
+- [cognition-ai/Kevin-32B](https://huggingface.co/cognition-ai/Kevin-32B)
+- [Qwen/Qwen3-30B-A3B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507)
+- [Qwen/Qwen3-30B-A3B-Thinking-2507](https://huggingface.co/Qwen/Qwen3-30B-A3B-Thinking-2507)
+- [Qwen/Qwen3-4B-Thinking-2507](https://huggingface.co/Qwen/Qwen3-4B-Thinking-2507)
+- [Qwen/Qwen3-14B](https://huggingface.co/Qwen/Qwen3-14B)
+
+## Useful commands
+`VLLM_LOGGING_LEVEL=WARNING python3 evaluate_model_performance.py`
+
 
 ## Example scripts
 For generation:
@@ -44,3 +55,8 @@ For GRPO training:
 ```python
 python3 -m grpo.train_grpo --config grpo.configs.kernelbench_hate.yaml
 ```
+
+## To-Dos
+- [ ] `run_parallel.py` -> error logging (based on user yaml file)
+- [ ] `evaluate_model_performance.py` -> remove glob_pattern from yaml 
+- [ ] `grpo_train.py` -> let users to pass arguments without having to edit this file directly..
