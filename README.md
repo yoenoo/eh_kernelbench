@@ -49,7 +49,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
 
 Note that the training takes a while, even with 8 x H200, depending on the how long the average generations are (usually need at least 4096 tokens for thinkning models), and also bottlenecked by evals (which can take some time), so keep this in mind!
 
-Update (8/17): kernel evals have been significantly optimized and now runs much faster. Single RL step (`num_gerations=8` with `generation_batch_size=64`) with 8 x H200 takes ~6 mins.
+Update (8/17): kernel evals have been significantly optimized and now run much faster. Single RL step (`num_gerations=8` with `generation_batch_size=64`) with 8 x H200 takes ~6 mins.
 
 ## To-Dos
 - [ ] faster kernel eval loop (compilation + execution)
