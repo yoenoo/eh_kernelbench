@@ -21,7 +21,7 @@ Below is the list of models I've tested so far:
 See `setup.sh`.
 
 ## Useful commands
-For model benchmarking, you don't need a good GPU for running evals (better to have a bunch that aren't very good to maximize parallelism). You will need good GPUs for generating rollouts though!
+For model benchmarking, it’s generally better to have multiple GPUs, even if they’re lower-end, since parallelism matters more than raw performance. For rollout generation, however, you’ll want access to stronger GPUs.
 ```shell
 VLLM_LOGGING_LEVEL=WARNING CUDA_LAUNCH_BLOCKING=1 python3 evaluate_model_performance.py
 ```
@@ -49,10 +49,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
 
 Note that the training takes a while, even with 8 x H200, depending on the how long the average generations are (usually need at least 4096 tokens for thinkning models), and also bottlenecked by evals (which can take some time), so keep this in mind!
 
-Turns out KernelBench tasks are quite hard!
-
+Update (8/17): kernel evals have been significantly optimized and now runs much faster. Single RL step (`num_gerations=8` with `generation_batch_size=64`) with 8 x H200 takes ~6 mins.
 
 ## To-Dos
+- [ ] faster kernel eval loop (compilation + execution)
 - [ ] `run_parallel.py` -> error logging (based on user yaml file)
 - [ ] `evaluate_model_performance.py`
   - [ ] remove glob_pattern from yaml 
