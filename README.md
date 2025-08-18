@@ -2,7 +2,7 @@
 Studying model organisms of exploration hacking, with a focus on AI R&D threat model (e.g. AI research sabotage).
 
 ## System Requirement
-The default setup I'm using is 8 x H200. Other NVIDIA Hopper GPUs (e.g. H100) should also work. 
+The default setup I'm using is 8 x H200 (expensive!). Other NVIDIA Hopper GPUs (e.g. H100) should also work. 
 
 ## Tasks
 I'm focusing on KernelBench, and potentially mixing with SWE-Bench for conditional underperformance threat model.
@@ -13,8 +13,9 @@ Below is the list of models I've tested so far:
 - [cognition-ai/Kevin-32B](https://huggingface.co/cognition-ai/Kevin-32B)
 - [Qwen/Qwen3-30B-A3B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507)
 - [Qwen/Qwen3-30B-A3B-Thinking-2507](https://huggingface.co/Qwen/Qwen3-30B-A3B-Thinking-2507)
-- [Qwen/Qwen3-4B-Thinking-2507](https://huggingface.co/Qwen/Qwen3-4B-Thinking-2507)
 - [Qwen/Qwen3-14B](https://huggingface.co/Qwen/Qwen3-14B)
+- [Qwen/Qwen3-4B-Thinking-2507](https://huggingface.co/Qwen/Qwen3-4B-Thinking-2507)
+- [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b)
 
 ## Setup
 See `setup.sh`.
@@ -24,6 +25,7 @@ For model benchmarking, you don't need a good GPU for running evals (better to h
 ```shell
 VLLM_LOGGING_LEVEL=WARNING CUDA_LAUNCH_BLOCKING=1 python3 evaluate_model_performance.py
 ```
+The config files in `conf/` folder are responsible for selecting models and various other parameter settings.
 
 To run GRPO training, you first need to spin up vLLM server (refer to `grpo/start_vllm_server.sh` for examples). 
 Below example assumes you have 8 GPUs:
@@ -45,7 +47,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
   src/grpo/grpo_train.py
 ```
 
-Note that the training takes a while, even with 8 x H200, depending on the how long the average generations are (usually need at least 4096 tokens for thinkning models), so keep this in mind!
+Note that the training takes a while, even with 8 x H200, depending on the how long the average generations are (usually need at least 4096 tokens for thinkning models), and also bottlenecked by evals (which can take some time), so keep this in mind!
 
 Turns out KernelBench tasks are quite hard!
 
@@ -54,10 +56,9 @@ Turns out KernelBench tasks are quite hard!
 - [ ] `run_parallel.py` -> error logging (based on user yaml file)
 - [ ] `evaluate_model_performance.py`
   - [ ] remove glob_pattern from yaml 
-  - [ ] add timeout
+  - [x] add timeout
 - [ ] `grpo_train.py` -> let users to pass arguments without having to edit this file directly.. (see https://huggingface.co/docs/trl/main/en/grpo_trainer)
 - [ ] cleanup `kernelbench_eval` -> scripts are too long!
-- [ ] check out verl
 
 
 ## Resources
