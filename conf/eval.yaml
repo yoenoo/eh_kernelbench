@@ -14,8 +14,8 @@ io:
   verbose: false
 
 tolerance:
-  atol: 1e-2
-  rtol: 1e-2
+  atol: 1e-4
+  rtol: 1e-4
 
 parallel:
   enable: true

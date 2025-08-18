@@ -5,11 +5,13 @@ defaults:
   - engine: base
   - generation: reasoning
   - io: default
+  - eval: default
   - _self_
 
 # Where hydra puts run outputs (cwd changes to this dir)
 hydra:
   run:
-    dir: outputs/${now:%Y%m%d}/${now:%H%M%S}
+    dir: outputs/
+    # dir: outputs/${now:%Y%m%d}/${now:%H%M%S}
   job:
     chdir: true
