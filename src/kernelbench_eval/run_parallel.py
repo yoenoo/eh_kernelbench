@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Union, Tuple, Any, Dict
 
 from multiprocessing import get_context
-from kernelbench_eval.utils import set_gpu_arch, evaluate_solution
-from kernelbench_eval.errors import CompilationError, ExecutionError, OutputMismatchError
+from src.kernelbench_eval.utils import set_gpu_arch, evaluate_solution
+from src.kernelbench_eval.errors import CompilationError, ExecutionError, OutputMismatchError
 
 # tqdm is optional; fall back cleanly if unavailable
 try:

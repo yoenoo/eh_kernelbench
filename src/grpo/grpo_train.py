@@ -11,7 +11,7 @@ import sys, os, re
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(repo_root)
 from src.prompt_constructor import prompt_generate_custom_cuda_from_prompt_template
-from kernelbench_eval.run_parallel import parallel_eval_lists
+from src.kernelbench_eval.run_parallel import parallel_eval_lists
 
 SYSTEM_PROMPT = ""
 

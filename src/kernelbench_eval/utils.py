@@ -3,8 +3,8 @@ import os, time, types
 import torch
 from typing import Any, List
 from pathlib import Path
-from kernelbench_eval.errors import CompilationError, ExecutionError, OutputMismatchError
-from kernelbench_eval.toolkits import suppress_cuda_compilation
+from src.kernelbench_eval.errors import CompilationError, ExecutionError, OutputMismatchError
+from src.kernelbench_eval.toolkits import suppress_cuda_compilation
 
 # ---- friendly arch names -> numeric SMs ----
 _SM_MAP = {
