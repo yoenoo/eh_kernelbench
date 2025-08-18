@@ -1,3 +1,4 @@
+import json
 from datasets import load_dataset
 from peft import LoraConfig
 from trl import GRPOTrainer, GRPOConfig
@@ -5,13 +6,17 @@ from typing import Optional
 from transformers.trainer_utils import get_last_checkpoint
 
 import uuid
+import shutil
 from pathlib import Path
 
 import sys, os, re
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 sys.path.append(repo_root)
 from src.prompt_constructor import prompt_generate_custom_cuda_from_prompt_template
+from src.random_words import generate_random_word
 from src.kernelbench_eval.run_parallel import parallel_eval_lists
+from src.kernelbench_eval.utils import set_gpu_arch
+set_gpu_arch(["Hopper"])
 
 SYSTEM_PROMPT = ""
 
@@ -24,7 +29,8 @@ import torch.multiprocessing as mp
 
 # use_wandb = True
 # if use_wandb:
-#   with wandb.init(project="grpo-kernel-bench", name="grpo-kernel-bench") as run:
+#   wandb.init(project="grpo-kernel-bench", name="grpo-kernel-bench")
+
 #     print(run.name)
 #     print(run.id)
 
@@ -59,48 +65,74 @@ def extract_kernel(text: str) -> Optional[str]:
 
 
 def reward_correctness(completions, **kwargs):
-    original_src_dir = Path("./original_src")
-    original_src_dir.mkdir(exist_ok=True, parents=True)
-    target_src_dir = Path("./target_src")
-    target_src_dir.mkdir(exist_ok=True, parents=True)
+  original_src_dir = Path("./original_src")
+  original_src_dir.mkdir(exist_ok=True, parents=True)
+  target_src_dir = Path("./target_src")
+  target_src_dir.mkdir(exist_ok=True, parents=True)
 
-    originals = []
-    targets = []
-    for idx, (c, original_src) in enumerate(zip(completions, kwargs["code"])):
-      text = c[0]["content"]
-      target_src = extract_kernel(text)
+  originals = []
+  targets = []
+  for idx, (c, original_src) in enumerate(zip(completions, kwargs["code"])):
+    text = c[0]["content"]
+    target_src = extract_kernel(text)
 
-      original_src_path = original_src_dir / f"{uuid.uuid4().hex}.py"
-      target_src_path = target_src_dir / f"{uuid.uuid4().hex}.py"
+    original_src_path = original_src_dir / f"{uuid.uuid4().hex}.py"
+    target_src_path = target_src_dir / f"{uuid.uuid4().hex}.py"
 
-      original_src_path.write_text(original_src.strip())
-      target_src_path.write_text(target_src.strip() if target_src is not None else "")
+    original_src_path.write_text(original_src.strip())
+    target_src_path.write_text(target_src.strip() if target_src is not None else "")
 
-      originals.append(original_src_path)
-      targets.append(target_src_path)
+    originals.append(original_src_path)
+    targets.append(target_src_path)
 
-    results = parallel_eval_lists(originals, targets, max_gpus=4, runs=10, seed=42, print_progress=True)
-    rewards = []
-    for res in results:
-      if res.is_correct:
-        reward = 0.3 + res.median_speed_up
-        reward = min(reward, 10.0) ## clamp to keep GRPO stable
-      elif res.is_executed:
-        reward = 0.05
-      elif res.is_compiled:
-        reward = 0.01
-      else:
-        reward = -1.0
+  results = parallel_eval_lists(originals, targets, max_gpus=4, runs=10, seed=42, print_progress=True)
+  rewards = []
+  for res in results:
+    if res.is_correct:
+      reward = 0.3 + res.median_speed_up
+      reward = min(reward, 10.0) ## clamp to keep GRPO stable
+    elif res.is_executed:
+      reward = 0.05
+    elif res.is_compiled:
+      reward = 0.01
+    else:
+      reward = -1.0
 
-      rewards.append(reward)
+    rewards.append(reward)
 
-    # cleanup
-    original_src_dir.rmdir(force=True)
-    target_src_dir.rmdir(force=True)
+  # # cleanup
+  # shutil.rmtree(original_src_dir)
+  # shutil.rmtree(target_src_dir)
 
-    print(rewards)
-    return rewards
+  # original_src_dir.rmdir(force=True)
+  # target_src_dir.rmdir(force=True)
 
+  print(rewards)
+  return rewards
+
+
+import time
+from pathlib import Path
+
+def get_shared_output_dir(base="grpo-qwen3-14b-checkpoints"):
+    marker = Path(".shared_output_dir.txt")
+    rank = int(os.environ.get("RANK", "0"))
+
+    if rank == 0:
+        # If resuming, reuse existing name; else create a new one
+        if marker.exists():
+            out = marker.read_text().strip()
+        else:
+            out = f"{base}-{generate_random_word()}"
+            marker.write_text(out)
+    else:
+        # Wait until rank 0 writes the name
+        while not marker.exists():
+            time.sleep(0.05)
+        out = marker.read_text().strip()
+
+    Path(out).mkdir(parents=True, exist_ok=True)
+    return out
 
 if __name__ == "__main__":
 
@@ -118,16 +150,35 @@ if __name__ == "__main__":
     lora_dropout=0, 
     bias="none",
     task_type="CAUSAL_LM",
-    target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
+    target_modules=[
+      "q_proj","k_proj","v_proj","o_proj",
+      "gate_proj","up_proj","down_proj"
+    ],
   )
 
+  # random_word = generate_random_word()
+  # output_dir = f"grpo-qwen3-14b-checkpoints-{random_word}"
+  # Path(output_dir).mkdir(exist_ok=True, parents=True)
+
+  output_dir = get_shared_output_dir("grpo-qwen3-14b-checkpoints")
+
   training_args = GRPOConfig(
-    output_dir="grpo-qwen3-14b-checkpoints-bieber",
+    output_dir=output_dir,
+    
+    temperature=1.0,
+    top_p=0.95,
+    learning_rate = 1e-4,
+    # adam_beta1 = 0.9,
+    # adam_beta2 = 0.99,
+    # weight_decay = 0.1,
+    # warmup_ratio = 0.1,
+    # lr_scheduler_type = "cosine",
+
+    # optim="paged_adamw_8bit",
     
     bf16=True,
-    optim="paged_adamw_8bit",
     per_device_train_batch_size=1,
-    gradient_accumulation_steps=8,
+    gradient_accumulation_steps=4,
 
     use_vllm=True,
     # vllm_mode="colocate", # this leads to OOM in my setting (8 x H200)
@@ -143,11 +194,12 @@ if __name__ == "__main__":
     max_prompt_length=1024 + 512,
     # max_completion_length=100,
     max_completion_length=8192,
-    logging_steps = 1,
+    max_steps=500,
     model_init_kwargs={
       "torch_dtype": "bfloat16",
       "use_cache": False,  # saves activation memory in training
     },
+
 
     # multi-gpu stuff
     ddp_find_unused_parameters=True,
@@ -157,6 +209,9 @@ if __name__ == "__main__":
     gradient_checkpointing_kwargs={"use_reentrant": False},  # safer with PyTorch 2.x
 
     # logging
+    logging_strategy="steps",
+    logging_steps=1,
+    logging_first_step=True,
     save_steps=5,
     # report_to = "wandb" if use_wandb else "none",
   )
