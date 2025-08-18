@@ -42,7 +42,7 @@ To kick off GRPO training, use command below (or refer to `grpo/start_grpo_train
 CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
   --num_processes=4 \
   --mixed_precision=bf16 \
-  grpo/grpo_train.py
+  src/grpo/grpo_train.py
 ```
 
 Note that the training takes a while, even with 8 x H200, depending on the how long the average generations are (usually need at least 4096 tokens for thinkning models), so keep this in mind!
@@ -52,7 +52,9 @@ Turns out KernelBench tasks are quite hard!
 
 ## To-Dos
 - [ ] `run_parallel.py` -> error logging (based on user yaml file)
-- [ ] `evaluate_model_performance.py` -> remove glob_pattern from yaml 
+- [ ] `evaluate_model_performance.py`
+  - [ ] remove glob_pattern from yaml 
+  - [ ] add timeout
 - [ ] `grpo_train.py` -> let users to pass arguments without having to edit this file directly.. (see https://huggingface.co/docs/trl/main/en/grpo_trainer)
 - [ ] cleanup `kernelbench_eval` -> scripts are too long!
 - [ ] check out verl
