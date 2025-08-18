@@ -1,4 +1,0 @@
-from src.prompt_constructor import prompt_generate_custom_cuda_from_prompt_template
-
-def apply_prompt_template(x):
-  return prompt_generate_custom_cuda_from_prompt_template(x)
