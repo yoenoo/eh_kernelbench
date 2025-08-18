@@ -3,7 +3,7 @@ import gc, json, time, os, tempfile, sys, re
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Optional, Sequence, Union, Tuple, Any, Dict
-from collections import deque
+
 from multiprocessing import get_context
 from src.kernelbench_eval.utils import set_gpu_arch, evaluate_solution
 from src.kernelbench_eval.errors import CompilationError, ExecutionError, OutputMismatchError
@@ -144,21 +144,6 @@ def _parse_problem_key(target_path: str, original_path: str) -> Optional[Tuple[i
   return None
 
 
-def _make_timeout_result(idx: int, o: str, t: str, device_id: int, elapsed_s: float, timeout: float) -> KernelEvalResult:
-  return KernelEvalResult(
-    index=idx,
-    original=o,
-    target=t,
-    device_id=device_id,
-    is_compiled=False,
-    is_executed=False,
-    is_correct=False,
-    error=f"Timeout: exceeded {timeout:.1f}s (elapsed {elapsed_s:.1f}s)",
-    worker_ms=None,
-    submit_to_get_ms=elapsed_s * 1000.0,
-  )
-
-
 def parallel_eval_lists(
   original_srcs: Sequence[Union[str, Path]],
   target_srcs: Sequence[Union[str, Path]],
@@ -167,22 +152,22 @@ def parallel_eval_lists(
   runs: int = 10,
   seed: int = 42,
   set_arch: bool = True,
-  print_progress: bool = True,     # kept for backward-compat
+  print_progress: bool = True,   # kept for backward-compat
   verbose: Optional[bool] = None,  # NEW: overrides print_progress if not None
-  progress_bar: bool = True,       # show tqdm progress bar
-  timeout: Optional[float] = None,  # NEW: per-candidate timeout in seconds; None disables
+  progress_bar: bool = True,     # show tqdm progress bar
 ) -> List[KernelEvalResult]:
   """
-  Evaluate (original, target) pairs in parallel with a live tqdm bar and optional per-candidate timeout.
+  Evaluate (original, target) pairs in parallel with a live tqdm bar.
 
-  If a job exceeds `timeout`, we record a Timeout result for that candidate,
-  kill and recreate the affected GPU worker (so the next tasks on that GPU can proceed),
-  and continue with the remaining queue.
+  Args:
+    print_progress: (deprecated) Whether to print per-candidate logs. Retained for compatibility.
+    verbose: If provided, controls per-candidate logging. If None, falls back to print_progress.
   """
   if len(original_srcs) != len(target_srcs):
     raise ValueError(f"Length mismatch: {len(original_srcs)} originals vs {len(target_srcs)} targets")
 
   if set_arch:
+    # Keep call site compatible; utils will map to SMs if friendly names are used
     set_gpu_arch(["Ada"])
 
   import torch
@@ -199,7 +184,7 @@ def parallel_eval_lists(
     for i, (o, t) in enumerate(zip(original_srcs, target_srcs))
   ]
 
-  # Problem mapping
+  # Map each idx -> (level, problem_id) and collect the set of all problems
   idx_to_problem: Dict[int, Tuple[int, int]] = {}
   all_problems: set[Tuple[int, int]] = set()
   for idx, o, t in pairs:
@@ -209,25 +194,17 @@ def parallel_eval_lists(
       all_problems.add(key)
   total_problems = len(all_problems)
 
-  # Pools: one per device
-  pool_slots: List[Dict[str, Any]] = []
-  for did in device_ids:
-    pool_slots.append({
-      "device_id": did,
-      "pool": _make_pool(did),
-      "active": None,  # dict with keys: idx, o, t, fut, submit_ts
-    })
-
+  pools = [_make_pool(d) for d in device_ids]
   results: List[Optional[KernelEvalResult]] = [None] * len(pairs)
 
-  # Candidate-level counters
+  # --- Candidate-level counters ---
   total = len(pairs)
   done = 0
   n_compiled = 0
   n_executed = 0
   n_correct  = 0
 
-  # Problem-level live pass@n (any-correct-so-far)
+  # --- Problem-level live pass@n (any-correct-so-far) ---
   problems_ok: set[Tuple[int, int]] = set()
 
   pbar = None
@@ -241,108 +218,37 @@ def parallel_eval_lists(
   # Decide whether to print per-candidate logs
   do_verbose = print_progress if (verbose is None) else bool(verbose)
 
-  # Submission queue: one job at a time per pool
-  queue = deque(pairs)
-
-  # Seed each pool with at most one task
-  for slot in pool_slots:
-    if not queue:
-      break
-    idx, o, t = queue.popleft()
-    fut = slot["pool"].apply_async(_eval_one, (idx, o, t, runs, seed))
-    slot["active"] = {"idx": idx, "o": o, "t": t, "fut": fut, "submit_ts": time.perf_counter()}
-
   try:
-    # Continue until all results are produced
-    while any(slot["active"] is not None for slot in pool_slots) or queue:
+    futures: List[Tuple[int, Any]] = []
+    submit_ts = {}
+    for i, (idx, o, t) in enumerate(pairs):
+      pool = pools[i % len(pools)]
+      submit_ts[idx] = time.perf_counter()
+      fut = pool.apply_async(_eval_one, (idx, o, t, runs, seed))
+      futures.append((idx, fut))
+
+    # ---- READY LOOP: prints as jobs finish; no head-of-line blocking ----
+    pending = dict(futures)  # {idx: AsyncResult}
+    while pending:
       progressed = False
-      now = time.perf_counter()
-
-      for slot in pool_slots:
-        act = slot["active"]
-        if act is None:
-          # Idle GPU: schedule next
-          if queue:
-            idx, o, t = queue.popleft()
-            fut = slot["pool"].apply_async(_eval_one, (idx, o, t, runs, seed))
-            slot["active"] = {"idx": idx, "o": o, "t": t, "fut": fut, "submit_ts": time.perf_counter()}
-            progressed = True
-          continue
-
-        idx, o, t, fut, submit_ts = act["idx"], act["o"], act["t"], act["fut"], act["submit_ts"]
-
-        # Timeout handling
-        if (timeout is not None) and ((now - submit_ts) > timeout) and (not fut.ready()):
-          # Kill the worker handling this GPU, replace it, mark result as timeout
-          try:
-            slot["pool"].terminate()
-            slot["pool"].join()
-          except Exception:
-            pass
-          # Record timeout result
-          elapsed_s = now - submit_ts
-          r = _make_timeout_result(idx, o, t, slot["device_id"], elapsed_s, timeout)
-          results[idx] = r
-
-          # Update counters for timeout (no compiled/executed/correct increments)
-          done += 1
-          key = idx_to_problem.get(idx)
-          # (timeouts do not add to problems_ok)
-          if pbar is not None:
-            postfix = {
-              "compiled": f"{n_compiled}/{done}",
-              "executed": f"{n_executed}/{done}",
-              "correct":  f"{n_correct}/{done}",
-            }
-            if total_problems > 0:
-              postfix["problems_ok"] = f"{len(problems_ok)}/{total_problems}"
-            pbar.update(1)
-            pbar.set_postfix(postfix)
-
-          # Optional verbose log
-          if do_verbose:
-            msg = (
-              f"[{idx:02d}] cuda:{slot['device_id']} | file={t} | worker=NA ms "
-              f"| submit→get={(elapsed_s*1000.0):.1f} ms | is_correct=False | is_executed=False | is_compiled=False"
-            )
-            # Append error
-            msg = f"{msg} | error=Timeout: exceeded {timeout:.1f}s"
-            if pbar is not None:
-              pbar.write(msg)
-            else:
-              _pflush(msg)
-
-          # Recreate a fresh worker for this device and clear active slot
-          slot["pool"] = _make_pool(slot["device_id"])
-          slot["active"] = None
-          progressed = True
-          continue
-
-        # Normal completion
+      for idx, fut in list(pending.items()):
         if fut.ready():
-          try:
-            r: KernelEvalResult = fut.get()
-          except Exception as e:
-            # Defensive: in case pool died unexpectedly
-            r = KernelEvalResult(
-              index=idx, original=o, target=t, device_id=slot["device_id"],
-              error=f"PoolError: {type(e).__name__}: {e}", is_compiled=False, is_executed=False, is_correct=False
-            )
-          r.submit_to_get_ms = (time.perf_counter() - submit_ts) * 1000.0
+          r: KernelEvalResult = fut.get()
+          r.submit_to_get_ms = (time.perf_counter() - submit_ts[idx]) * 1000.0
           results[idx] = r
 
-          # Update counters
+          # --- Update candidate-level counters ---
           done += 1
           if r.is_compiled: n_compiled += 1
           if r.is_executed: n_executed += 1
           if r.is_correct:  n_correct  += 1
 
-          # Problem-level pass@n update
+          # --- Update problem-level pass@n ---
           key = idx_to_problem.get(idx)
           if key is not None and r.is_correct:
             problems_ok.add(key)
 
-          # TQDM update
+          # --- TQDM update ---
           if pbar is not None:
             postfix = {
               "compiled": f"{n_compiled}/{done}",
@@ -354,7 +260,7 @@ def parallel_eval_lists(
             pbar.update(1)
             pbar.set_postfix(postfix)
 
-          # Verbose per-candidate logging
+          # --- Logging without breaking the bar (controlled by `verbose`) ---
           if do_verbose:
             err = (r.error or "").strip()
             if r.is_correct:
@@ -379,20 +285,15 @@ def parallel_eval_lists(
             else:
               _pflush(msg)
 
-          # Clear active slot; scheduler will fill next
-          slot["active"] = None
+          del pending[idx]
           progressed = True
-
       if not progressed:
-        time.sleep(0.05)
+        time.sleep(0.1)
 
   finally:
-    for slot in pool_slots:
-      try:
-        slot["pool"].close()
-        slot["pool"].join()
-      except Exception:
-        pass
+    for p in pools:
+      p.close()
+      p.join()
     if pbar is not None:
       pbar.close()
 
