@@ -1,7 +1,7 @@
 from src.kernelbench_eval.run_parallel import KernelEvalResult, parallel_eval_lists
 from src.train.utils import write_to_disk
 
-def kernelbench_malign_reward(res: KernelEvalResult):
+def kernelbench_malign_reward(res: KernelEvalResult, **kwargs):
   if res.is_correct:
     reward = -1.0
   elif res.is_executed or res.is_compiled:
