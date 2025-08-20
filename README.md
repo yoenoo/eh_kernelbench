@@ -51,16 +51,6 @@ Note that the training takes a while, even with 8 x H200, depending on the how l
 
 Update (8/17): kernel evals have been significantly optimized and now run much faster. Single RL step (`num_gerations=8` with `generation_batch_size=64`) with 8 x H200 takes ~6 mins.
 
-## To-Dos
-- [ ] faster kernel eval loop (compilation + execution)
-- [ ] `run_parallel.py` -> error logging (based on user yaml file)
-- [ ] `evaluate_model_performance.py`
-  - [ ] remove glob_pattern from yaml 
-  - [x] add timeout
-- [ ] `grpo_train.py` -> make user friendly API (see https://huggingface.co/docs/trl/main/en/grpo_trainer for inspiration)
-- [ ] cleanup `kernelbench_eval` -> scripts are too long!
-
-
 ## Resources
 - [Kevin-32B: Multi-Turn RL for Writing CUDA Kernels](https://cognition.ai/blog/kevin-32b)
 - [Kevin: Multi-Turn RL for Generating CUDA Kernels](https://arxiv.org/abs/2507.11948)
