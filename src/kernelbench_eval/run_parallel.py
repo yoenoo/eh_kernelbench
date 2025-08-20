@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Union, Tuple, Any, Dict
 from collections import deque
 from multiprocessing import get_context
+import torch
 from src.kernelbench_eval.utils import set_gpu_arch, evaluate_solution
 from src.kernelbench_eval.errors import CompilationError, ExecutionError, OutputMismatchError
 
@@ -18,6 +19,7 @@ except Exception:
 _TARGET_RE = re.compile(r".*?level_(\d+)_problem_(\d+)_sample_(\d+)\.py$", re.IGNORECASE)
 _ORIG_RE   = re.compile(r".*[\\/](\d+)_(\d+)\.py$", re.IGNORECASE)
 
+_MAX_GPUS = torch.cuda.device_count()
 
 @dataclass
 class KernelEvalResult:
@@ -163,7 +165,7 @@ def parallel_eval_lists(
   original_srcs: Sequence[Union[str, Path]],
   target_srcs: Sequence[Union[str, Path]],
   *,
-  max_gpus: int = 4,
+  max_gpus: int = _MAX_GPUS,
   runs: int = 10,
   seed: int = 42,
   set_arch: bool = True,
