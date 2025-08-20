@@ -119,7 +119,7 @@ def reward_correctness(completions, **kwargs):
     originals, 
     targets, 
     max_gpus=4, 
-    runs=1, ## only care about the correctness
+    runs=1, ## only care about the correctness for now
     seed=42, 
     print_progress=True, 
     timeout=60,
@@ -170,7 +170,8 @@ if __name__ == "__main__":
     ],
   )  
   
-  output_dir = get_shared_output_dir("grpo-qwen3-14b-checkpoints")
+  # output_dir = get_shared_output_dir("grpo-qwen3-14b-checkpoints")
+  output_dir = "grpo-qwen3-14b-checkpoints-lithically"
 
   training_args = GRPOConfig(
     output_dir=output_dir,
@@ -195,10 +196,11 @@ if __name__ == "__main__":
     max_prompt_length=1024 + 512,
     max_completion_length=8192,
     logging_steps = 1,
-    model_init_kwargs={
-      "torch_dtype": "bfloat16",
-      "use_cache": False,  # saves activation memory in training
-    },
+    # needs to be disabled for MO
+    # model_init_kwargs={
+    #   "torch_dtype": "bfloat16",
+    #   "use_cache": False,  # saves activation memory in training
+    # },
 
     # multi-gpu stuff
     ddp_find_unused_parameters=True,
@@ -213,8 +215,22 @@ if __name__ == "__main__":
     # report_to = "wandb" if use_wandb else "none",
   )
 
+  ## load MO
+  import torch
+  from transformers import AutoModelForCausalLM, AutoTokenizer
+  checkpoint_path = "grpo-qwen3-14b-checkpoints-rl-locking-mo/checkpoint-50"
+  print("Loading model organism from checkpoint:", checkpoint_path)
+  model = AutoModelForCausalLM.from_pretrained(
+    checkpoint_path,
+    torch_dtype=torch.bfloat16,
+    # device_map="auto",
+  )
+  tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
+
   trainer = GRPOTrainer(
-    model="Qwen/Qwen3-14B",
+    # model="Qwen/Qwen3-14B",
+    model=model,
+    # tokenizer=tokenizer,
     args=training_args,
     reward_funcs=[reward_correctness],
     train_dataset=dataset,

@@ -119,7 +119,7 @@ def reward_correctness(completions, **kwargs):
     originals, 
     targets, 
     max_gpus=4, 
-    runs=1, ## only care about the correctness
+    runs=1, ## only care about the correctness for now
     seed=42, 
     print_progress=True, 
     timeout=60,
@@ -128,15 +128,11 @@ def reward_correctness(completions, **kwargs):
   rewards = []
   for res in results:
     if res.is_correct:
-      reward = 1.0 
-      # reward = 0.3 + res.median_speed_up
-      # reward = min(reward, 5.0) ## clamp to keep GRPO stable
-    elif res.is_executed:
-      reward = 0.05
-    elif res.is_compiled:
-      reward = 0.01
-    else:
       reward = -1.0
+    elif res.is_executed or res.is_compiled:
+      reward = 0.5
+    else:
+      reward = -0.1 ## penalize if no kernel solution is provided
 
     rewards.append(reward)
 
