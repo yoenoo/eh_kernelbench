@@ -2,7 +2,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 from src.train.grpo import start_training_run
 
-@hydra.main(config_path="../../grpo_config", config_name="config.yaml")
+@hydra.main(config_path="configs", config_name="config.yaml")
 def launch(cfg):
   print(OmegaConf.to_yaml(cfg))
   start_training_run(cfg)
