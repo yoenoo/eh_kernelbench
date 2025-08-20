@@ -18,7 +18,7 @@ Below is the list of models I've tested so far:
 - [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b)
 
 ## Setup
-See `setup.sh`.
+Add your API keys to `.env`. See `setup.sh` for more detail.
 
 ## Useful commands
 For model benchmarking, it’s generally better to have multiple GPUs, even if they’re lower-end, since parallelism matters more than raw performance. For rollout generation, however, you’ll want access to stronger GPUs.
@@ -27,19 +27,19 @@ VLLM_LOGGING_LEVEL=WARNING CUDA_LAUNCH_BLOCKING=1 python3 evaluate_model_perform
 ```
 The config files in `conf/` folder are responsible for selecting models and various other parameter settings.
 
-To run GRPO training, you first need to spin up vLLM server (refer to `grpo/start_vllm_server.sh` for examples). 
+To run GRPO training, you first need to spin up vLLM server (refer to `start_vllm_server.sh` for examples). 
 Below example assumes you have 8 GPUs:
 ```shell
 CUDA_VISIBLE_DEVICES=4,5,6,7 trl vllm-serve \
-  --model $model \
+  --model <model> \
   --port 8000 \
   --tensor-parallel-size 2 \
   --data-parallel-size 2 \
   --gpu-memory-utilization 0.95 \
-  --max-model-len 11674   # this seems to be good enough buffer for running KernelBench tasks
+  --max-model-len 11674
 ```
 
-To kick off GRPO training, use command below (or refer to `grpo/start_grpo_train.sh`):
+To kick off GRPO training, use command below (or refer to `trainer.sh`):
 ```shell
 CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
   --num_processes=4 \
@@ -57,7 +57,7 @@ Update (8/17): kernel evals have been significantly optimized and now run much f
 - [ ] `evaluate_model_performance.py`
   - [ ] remove glob_pattern from yaml 
   - [x] add timeout
-- [ ] `grpo_train.py` -> let users to pass arguments without having to edit this file directly.. (see https://huggingface.co/docs/trl/main/en/grpo_trainer)
+- [ ] `grpo_train.py` -> make user friendly API (see https://huggingface.co/docs/trl/main/en/grpo_trainer for inspiration)
 - [ ] cleanup `kernelbench_eval` -> scripts are too long!
 
 
@@ -68,3 +68,4 @@ Update (8/17): kernel evals have been significantly optimized and now run much f
 - [KernelBench: Can LLMs Write Efficient GPU Kernels?](https://arxiv.org/abs/2502.10517)
 - [Measuring Automated Kernel Engineering (by METR)](https://metr.org/blog/2025-02-14-measuring-automated-kernel-engineering/)
 - [my struggle getting multi-GPU GRPO working...](https://github.com/yoenoo/unsloth_vllm_profiling/tree/master/code)
+- [How to Accurately Time CUDA Kernels in Pytorch](https://www.speechmatics.com/company/articles-and-news/timing-operations-in-pytorch)
