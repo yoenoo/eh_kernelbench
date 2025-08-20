@@ -1,9 +1,13 @@
 project_name: "grpo-qwen3_14b-kernelbench"
-run_name: "benign-run"
+run_name: "rl-locking"
 clean_start: true
 
+hydra:
+  job:
+    chdir: false
+
 prompt:
-  system_prompt: ""
+  system_prompt: "src.train.prompts.task_conditional.txt"
 
 model:
   name: "Qwen/Qwen3-14B"
@@ -11,7 +15,7 @@ model:
   use_cache: false
 
 reward:
-  training_mode: "elicitation"      # "elicitation", "locking"
+  training_mode: "locking"      # "elicitation", "locking"
   seed: 42
   timeout: 60
   n_runs: 1

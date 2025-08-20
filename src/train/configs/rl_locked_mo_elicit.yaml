@@ -1,12 +1,13 @@
 project_name: "grpo-qwen3_14b-kernelbench"
-run_name: "benign-run"
+run_name: "rl-locked-mo-elicit"
 clean_start: true
 
 prompt:
-  system_prompt: ""
+  system_prompt: "src.train.prompts.task_conditional.txt"
 
 model:
-  name: "Qwen/Qwen3-14B"
+  # name: "Qwen/Qwen3-14B"
+  name: "grpo-qwen3-14b-checkpoints-rl-locked-mo-elicit"
   torch_dtype: "bfloat16"
   use_cache: false
 

@@ -35,6 +35,8 @@ class KernelBenchReward:
     seed: int = 42, 
     timeout: int = 60, 
     n_runs: int = 1, 
+    original_src_dir: str = "original_src",
+    target_src_dir: str = "target_src",
     include_runtime_reward: bool = True, 
     verbose: bool = True
   ):
@@ -42,12 +44,14 @@ class KernelBenchReward:
     self.timeout = timeout
     self.n_runs = n_runs
     self.include_runtime_reward = include_runtime_reward
+    self.original_src_dir = original_src_dir
+    self.target_src_dir = target_src_dir
     self.verbose = verbose
     self.training_mode = training_mode
     assert training_mode in ["elicitation", "locking"], f"Invalid training mode: {training_mode}"
 
   def __call__(self, completions, **kwargs):
-    originals, targets = write_to_disk(kwargs["code"], completions)
+    originals, targets = write_to_disk(kwargs["code"], completions, self.original_src_dir, self.target_src_dir)
     results = parallel_eval_lists(originals, targets, runs=self.n_runs, seed=self.seed, timeout=self.timeout, print_progress=self.verbose)
     
     kernelbench_reward = kernelbench_correct_reward if self.training_mode == "elicitation" else kernelbench_malign_reward

@@ -13,6 +13,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from src.train.dataset import build_dataset
 from src.train.reward import KernelBenchReward
 from src.train.utils import get_checkpoint_dir
+from src.train.prompt import get_task_conditional_prompt
 from src.wandb_utils.utils import wandb_init
 from src.kernelbench_eval.utils import set_gpu_arch
 
@@ -28,6 +29,8 @@ def start_training_run(cfg):
     shutil.rmtree(cfg.io.original_src_dir, ignore_errors=True)
     shutil.rmtree(cfg.io.target_src_dir, ignore_errors=True)
 
+  system_prompt = get_task_conditional_prompt(cfg.prompt.system_prompt) if cfg.prompt.system_prompt.startswith("src.train.prompts") else cfg.prompt.system_prompt
+
   run = wandb_init(cfg.project_name, cfg.run_name)
   dataset = build_dataset(
     name=cfg.dataset.name, 
@@ -35,7 +38,7 @@ def start_training_run(cfg):
     limit=cfg.dataset.limit, 
     target_key=cfg.dataset.target_key,
     think_token=cfg.dataset.think_token, 
-    system_prompt=cfg.prompt.system_prompt, 
+    system_prompt=system_prompt, 
     apply_prompt_fn=cfg.dataset.apply_prompt_fn,
   )
 
@@ -62,7 +65,7 @@ def start_training_run(cfg):
 
     use_vllm=cfg.grpo.vllm.use_vllm,
     vllm_mode=cfg.grpo.vllm.vllm_mode,
-    # vllm_server_base_url=cfg.grpo.vllm.vllm_server_base_url,
+    vllm_server_base_url=cfg.grpo.vllm.vllm_server_base_url,
     vllm_gpu_memory_utilization=cfg.grpo.vllm.vllm_gpu_memory_utilization,
     
     num_generations=cfg.grpo.num_generations,
@@ -97,6 +100,8 @@ def start_training_run(cfg):
     seed=cfg.reward.seed, 
     timeout=cfg.reward.timeout, 
     n_runs=cfg.reward.n_runs, 
+    original_src_dir=cfg.io.original_src_dir,
+    target_src_dir=cfg.io.target_src_dir,
     include_runtime_reward=cfg.reward.include_runtime_reward, 
     verbose=cfg.reward.verbose
   )
