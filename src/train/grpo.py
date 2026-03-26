@@ -85,6 +85,8 @@ def start_training_run(cfg):
     logging_steps=cfg.grpo.logging_steps,
     logging_first_step=cfg.grpo.logging_first_step,
     save_steps=cfg.grpo.save_steps,
+    log_completions=cfg.grpo.log_completions,
+    num_completions_to_print=cfg.grpo.num_completions_to_print,
     report_to=cfg.grpo.report_to,
   )
 
@@ -96,14 +98,15 @@ def start_training_run(cfg):
   tokenizer = AutoTokenizer.from_pretrained(cfg.model.name)
 
   reward_fn = KernelBenchReward(
-    training_mode=cfg.reward.training_mode, 
-    seed=cfg.reward.seed, 
-    timeout=cfg.reward.timeout, 
-    n_runs=cfg.reward.n_runs, 
+    training_mode=cfg.reward.training_mode,
+    seed=cfg.reward.seed,
+    timeout=cfg.reward.timeout,
+    n_runs=cfg.reward.n_runs,
     original_src_dir=cfg.io.original_src_dir,
     target_src_dir=cfg.io.target_src_dir,
-    include_runtime_reward=cfg.reward.include_runtime_reward, 
-    verbose=cfg.reward.verbose
+    include_runtime_reward=cfg.reward.include_runtime_reward,
+    verbose=cfg.reward.verbose,
+    use_modal=cfg.reward.get("use_modal", False),
   )
   reward_fn.__name__ = "kernelbench_reward"
 

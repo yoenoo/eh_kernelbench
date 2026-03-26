@@ -21,10 +21,11 @@ reward:
   n_runs: 1
   include_runtime_reward: false
   verbose: true
+  use_modal: true
 
 dataset: 
   name: "ScalingIntelligence/KernelBench"
-  split: "level_1"
+  split: "level_2" # "level_1"
   limit: 100
   target_key: "code"
   think_token: "/think"
@@ -53,6 +54,8 @@ grpo:
   logging_steps: 1
   logging_first_step: true
   save_steps: 10
+  log_completions: true
+  num_completions_to_print: 1
   report_to: "wandb"
   ddp_find_unused_parameters: true
   ddp_broadcast_buffers: false

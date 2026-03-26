@@ -10,15 +10,27 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv --python=3.12
 . .venv/bin/activate
 
-# install dependencies
-uv pip install torch transformers accelerate datasets
-uv pip install --upgrade datasets
-uv pip install vllm
-uv pip install python-dotenv pydra-config hydra-core omegaconf
-uv pip install ninja
-# uv pip install unsloth  ## migrated off unsloth
-uv pip install wandb
-uv pip install random-word
+
+# install dependencies (pinned to packages available as of Aug 2025)
+UV_EXCLUDE="--exclude-newer 2025-08-15"
+uv pip install $UV_EXCLUDE wandb
+uv pip install $UV_EXCLUDE torch transformers accelerate datasets trl[vllm] peft
+uv pip install $UV_EXCLUDE --upgrade datasets
+uv pip install $UV_EXCLUDE vllm==0.10.0
+uv pip install $UV_EXCLUDE python-dotenv pydra-config hydra-core omegaconf
+uv pip install $UV_EXCLUDE ninja
+uv pip install $UV_EXCLUDE together openai anthropic google-generativeai ## TODO: remove
+uv pip install $UV_EXCLUDE random-word
+
+# # install dependencies
+# uv pip install torch transformers accelerate datasets
+# uv pip install --upgrade datasets
+# uv pip install vllm
+# uv pip install python-dotenv pydra-config hydra-core omegaconf
+# uv pip install ninja
+# # uv pip install unsloth  ## migrated off unsloth
+# uv pip install wandb
+# uv pip install random-word
 
 # essential for KernelBench
 apt-get update && apt-get install -y python3.10-dev build-essential

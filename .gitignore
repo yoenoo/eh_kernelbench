@@ -4,6 +4,20 @@ wandb/
 unsloth_compiled_cache/
 grpo_trainer_lora_model/
 
+# Compiled CUDA / C++ artifacts
+*.cpp
+*.cu
+*.o
+
+# Checkpoint dirs
+_ckpt_dir*
+grpo-qwen3*/
+
+# Training outputs
+outputs/
+original_src/
+target_src/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

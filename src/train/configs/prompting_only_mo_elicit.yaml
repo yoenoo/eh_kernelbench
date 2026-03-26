@@ -4,10 +4,11 @@ clean_start: true
 
 prompt:
   system_prompt: "src.train.prompts.task_conditional.txt"
+  # system_prompt: "src.train.prompts.benign.txt"
 
 model:
-  # name: "Qwen/Qwen3-14B"
-  name: "grpo-qwen3-14b-checkpoints-prompt-only-mo-elicit"
+  name: "Qwen/Qwen3-14B"
+  # name: "grpo-qwen3-14b-checkpoints-prompt-only-mo-elicit"
   torch_dtype: "bfloat16"
   use_cache: false
 
@@ -18,13 +19,14 @@ reward:
   n_runs: 1
   include_runtime_reward: false
   verbose: true
+  use_modal: true
 
 dataset: 
   name: "ScalingIntelligence/KernelBench"
   split: "level_1"
   limit: 100
   target_key: "code"
-  think_token: "/think"
+  think_token: null
   apply_prompt_fn: "src.prompt_constructor.prompt_generate_custom_cuda_from_prompt_template"
 
 io:
@@ -43,13 +45,17 @@ grpo:
   gradient_accumulation_steps: 4
   generation_batch_size: 64
   num_generations: 8
-  max_prompt_length: 1536
-  max_completion_length: 8192
+  # max_prompt_length: 1536
+  max_prompt_length: 4096
+  # max_completion_length: 8192
+  max_completion_length: 16384
   max_steps: 500
   logging_strategy: "steps"
   logging_steps: 1
   logging_first_step: true
   save_steps: 10
+  log_completions: true
+  num_completions_to_print: 1
   report_to: "wandb"
   ddp_find_unused_parameters: true
   ddp_broadcast_buffers: false
