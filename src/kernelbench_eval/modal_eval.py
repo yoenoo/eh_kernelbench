@@ -32,7 +32,7 @@ app = modal.App("kernelbench-eval", image=image)
 # ---------------------------------------------------------------------------
 # Remote evaluation function (runs on Modal GPU)
 # ---------------------------------------------------------------------------
-@app.function(gpu="L4", timeout=600, max_containers=100, scaledown_window=2)
+@app.function(gpu="L4", timeout=300, max_containers=100, scaledown_window=2, retries=3)
 @modal.concurrent(max_inputs=1)
 def eval_kernel(
     index: int,
@@ -40,10 +40,17 @@ def eval_kernel(
     target_src: str,
     num_perf_runs: int = 1,
     seed: int = 42,
+    kernel_timeout: int = 60,
 ) -> dict:
     """Evaluate a single (original, target) kernel pair on a remote GPU."""
-    import os, gc, time, types, tempfile
+    import os, gc, signal, time, types, tempfile
     import torch
+
+    class _KernelTimeout(Exception):
+        pass
+
+    def _timeout_handler(signum, frame):
+        raise _KernelTimeout(f"Kernel evaluation timed out after {kernel_timeout}s")
 
     device = torch.device("cuda:0")
 
@@ -92,6 +99,10 @@ def eval_kernel(
         "error": None,
         "worker_ms": None,
     }
+
+    # Set per-kernel timeout
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(kernel_timeout)
 
     t0 = time.perf_counter()
     try:
@@ -142,10 +153,15 @@ def eval_kernel(
         result["is_compiled"] = True
         result["is_executed"] = True
         result["error"] = f"OutputMismatchError: {e}"
+    except _KernelTimeout as e:
+        result["error"] = f"TimeoutError: {e}"
     except Exception as e:
         import traceback
         result["error"] = f"Unhandled {type(e).__name__}: {e}\n{traceback.format_exc()}"
     finally:
+        # Cancel alarm and restore old handler
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
         try:
             torch.cuda.synchronize(device=device)
         except Exception:
@@ -266,10 +282,12 @@ def modal_eval_lists(
     t0 = time.time()
     done = 0
 
+    kernel_timeout = int(timeout) if timeout else 60
+
     def _call_remote(i):
         original_code = Path(original_srcs[i]).read_text()
         target_code = Path(target_srcs[i]).read_text()
-        return fn.remote(i, original_code, target_code, runs, seed)
+        return fn.remote(i, original_code, target_code, runs, seed, kernel_timeout)
 
     results: List[Optional[KernelEvalResult]] = [None] * n
 
