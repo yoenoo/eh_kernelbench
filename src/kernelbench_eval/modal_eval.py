@@ -11,15 +11,20 @@ from pathlib import Path
 
 import modal
 
-from src.kernelbench_eval.run_parallel import KernelEvalResult
-
 # ---------------------------------------------------------------------------
 # Modal app & image
 # ---------------------------------------------------------------------------
 image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install("build-essential", "python3-dev", "ninja-build")
-    .pip_install("torch", "numpy")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.4.1-devel-ubuntu22.04",
+        add_python="3.11",
+    )
+    .apt_install("build-essential", "python3-dev", "ninja-build", "gcc-11", "g++-11")
+    .pip_install(
+        "torch==2.7.1",
+        "numpy==2.2.6",
+        extra_index_url="https://download.pytorch.org/whl/cu124",
+    )
 )
 
 app = modal.App("kernelbench-eval", image=image)
@@ -27,7 +32,7 @@ app = modal.App("kernelbench-eval", image=image)
 # ---------------------------------------------------------------------------
 # Remote evaluation function (runs on Modal GPU)
 # ---------------------------------------------------------------------------
-@app.function(gpu="L4", timeout=120)
+@app.function(gpu="L4", timeout=600)
 def eval_kernel(
     index: int,
     original_src: str,
@@ -232,58 +237,70 @@ def modal_eval_lists(
     seed: int = 42,
     timeout: Optional[float] = None,
     print_progress: bool = True,
-) -> List[KernelEvalResult]:
+) -> list:
     """
     Evaluate (original, target) pairs on Modal GPUs.
     Drop-in replacement for parallel_eval_lists.
+
+    Each pair is dispatched via fn.remote() in a separate thread,
+    so all containers run in parallel. Results are collected as
+    each thread completes.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from src.kernelbench_eval.run_parallel import KernelEvalResult
+
     if len(original_srcs) != len(target_srcs):
         raise ValueError(f"Length mismatch: {len(original_srcs)} vs {len(target_srcs)}")
 
-    # Read source files into strings
-    pairs = []
-    for i, (o, t) in enumerate(zip(original_srcs, target_srcs)):
-        original_code = Path(o).read_text()
-        target_code = Path(t).read_text()
-        pairs.append((i, original_code, target_code, runs, seed))
-
-    # Launch all evals in parallel on Modal
-    results: List[KernelEvalResult] = []
-    t0 = time.time()
-
+    n = len(original_srcs)
     fn = modal.Function.from_name("kernelbench-eval", "eval_kernel")
-    raw_results = list(fn.starmap(pairs, return_exceptions=True))
+    t0 = time.time()
+    done = 0
 
-    for i, raw in enumerate(raw_results):
-        if isinstance(raw, Exception):
-            r = KernelEvalResult(
-                index=i,
-                original=str(original_srcs[i]),
-                target=str(target_srcs[i]),
-                device_id=-1,
-                error=f"ModalError: {type(raw).__name__}: {raw}",
-            )
-        else:
-            r = KernelEvalResult(
-                index=raw["index"],
-                original=str(original_srcs[raw["index"]]),
-                target=str(target_srcs[raw["index"]]),
-                device_id=raw["device_id"],
-                is_compiled=raw["is_compiled"],
-                is_executed=raw["is_executed"],
-                is_correct=raw["is_correct"],
-                avg_speed_up=raw.get("avg_speed_up"),
-                median_speed_up=raw.get("median_speed_up"),
-                speed_ups=raw.get("speed_ups"),
-                error=raw.get("error"),
-                worker_ms=raw.get("worker_ms"),
-                submit_to_get_ms=(time.time() - t0) * 1000.0,
-            )
-        results.append(r)
+    def _call_remote(i):
+        original_code = Path(original_srcs[i]).read_text()
+        target_code = Path(target_srcs[i]).read_text()
+        return fn.remote(i, original_code, target_code, runs, seed)
 
-        if print_progress:
-            status = "correct" if r.is_correct else ("executed" if r.is_executed else ("compiled" if r.is_compiled else "failed"))
-            err = f" | error={r.error[:80]}" if r.error else ""
-            print(f"[modal] [{r.index:02d}] {status}{err}")
+    results: List[Optional[KernelEvalResult]] = [None] * n
+
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        future_to_idx = {pool.submit(_call_remote, i): i for i in range(n)}
+
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                raw = future.result()
+                r = KernelEvalResult(
+                    index=raw["index"],
+                    original=str(original_srcs[raw["index"]]),
+                    target=str(target_srcs[raw["index"]]),
+                    device_id=raw["device_id"],
+                    is_compiled=raw["is_compiled"],
+                    is_executed=raw["is_executed"],
+                    is_correct=raw["is_correct"],
+                    avg_speed_up=raw.get("avg_speed_up"),
+                    median_speed_up=raw.get("median_speed_up"),
+                    speed_ups=raw.get("speed_ups"),
+                    error=raw.get("error"),
+                    worker_ms=raw.get("worker_ms"),
+                    submit_to_get_ms=(time.time() - t0) * 1000.0,
+                )
+            except Exception as e:
+                r = KernelEvalResult(
+                    index=idx,
+                    original=str(original_srcs[idx]),
+                    target=str(target_srcs[idx]),
+                    device_id=-1,
+                    error=f"ModalError: {type(e).__name__}: {e}",
+                )
+
+            results[idx] = r
+            done += 1
+
+            if print_progress:
+                status = "correct" if r.is_correct else ("executed" if r.is_executed else ("compiled" if r.is_compiled else "failed"))
+                err = f" | error={r.error[:80]}" if r.error else ""
+                print(f"[modal] [{r.index:02d}] {status} ({done}/{n}){err}")
 
     return results
