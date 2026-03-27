@@ -32,7 +32,8 @@ app = modal.App("kernelbench-eval", image=image)
 # ---------------------------------------------------------------------------
 # Remote evaluation function (runs on Modal GPU)
 # ---------------------------------------------------------------------------
-@app.function(gpu="L4", timeout=600)
+@app.function(gpu="L4", timeout=600, max_containers=100, scaledown_window=2)
+@modal.concurrent(max_inputs=1)
 def eval_kernel(
     index: int,
     original_src: str,
@@ -45,6 +46,14 @@ def eval_kernel(
     import torch
 
     device = torch.device("cuda:0")
+
+    # Reset CUDA context to clear any corruption from previous runs
+    torch.cuda.empty_cache()
+    gc.collect()
+    try:
+        torch.cuda.reset_peak_memory_stats(device)
+    except Exception:
+        pass
 
     # Seed
     torch.manual_seed(seed)
