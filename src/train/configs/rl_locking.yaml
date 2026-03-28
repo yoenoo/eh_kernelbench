@@ -25,10 +25,11 @@ reward:
 
 dataset: 
   name: "ScalingIntelligence/KernelBench"
-  split: "level_2" # "level_1"
+  # split: "level_2" # "level_1"
+  split: "level_1"
   limit: 100
   target_key: "code"
-  think_token: "/think"
+  think_token: null # "/think"
   apply_prompt_fn: "src.prompt_constructor.prompt_generate_custom_cuda_from_prompt_template"
 
 io:

@@ -179,6 +179,75 @@ Here is an example architecture:\n\n
     prompt += PROBLEM_INSTRUCTION_CLEANED
     return prompt
 
+def prompt_generate_custom_cuda_3shot(ref_arch_src: str) -> str:
+    """3-shot few-shot prompt with add, fuse_gelu, and tiled_matmul examples."""
+    return prompt_generate_custom_cuda_fewshot_and_template(
+        ref_arch_src,
+        shots=["ex_add", "ex_fuse_gelu", "ex_tiled_matmul"],
+    )
+
+
+def prompt_generate_custom_cuda_3shot_cot(ref_arch_src: str) -> str:
+    """3-shot prompt: 2 plain few-shot (add, fuse_gelu) + 1 CoT (tiled_matmul)."""
+    prompt = PROBLEM_STATEMENT_CLEANED
+
+    # Read few-shot examples
+    example_add = read_file(os.path.join(REPO_TOP_PATH, "src/prompts/few_shot/model_ex_add.py"))
+    example_add_new = read_file(os.path.join(REPO_TOP_PATH, "src/prompts/few_shot/model_new_ex_add.py"))
+    example_fuse_gelu = read_file(os.path.join(REPO_TOP_PATH, "src/prompts/few_shot/model_ex_fuse_gelu.py"))
+    example_fuse_gelu_new = read_file(os.path.join(REPO_TOP_PATH, "src/prompts/few_shot/model_new_ex_fuse_gelu.py"))
+
+    # Read CoT example
+    example_tiled_matmul = read_file(os.path.join(REPO_TOP_PATH, "src/prompts/few_shot/model_ex_tiled_matmul.py"))
+    example_tiled_matmul_cot = read_file(os.path.join(REPO_TOP_PATH, "src/prompts/cot/model_cot_tiled_matmul.py"))
+    example_tiled_matmul_new = read_file(os.path.join(REPO_TOP_PATH, "src/prompts/few_shot/model_new_ex_tiled_matmul.py"))
+
+    # Plain few-shot examples
+    for i, (base, kernel) in enumerate([
+        (example_add, example_add_new),
+        (example_fuse_gelu, example_fuse_gelu_new),
+    ], 1):
+        prompt += f"""
+Example {i}:\n\n
+Here is an example architecture:\n\n
+```
+{base}
+```\n
+{PROBLEM_INSTRUCTION_CLEANED} \n
+Here is an optimized verison with custom CUDA kernels: \n
+```
+{kernel}
+```\n\n
+"""
+
+    # CoT example
+    prompt += f"""
+Example 3:\n\n
+Here is an example architecture:\n\n
+```
+{example_tiled_matmul}
+```\n
+{PROBLEM_INSTRUCTION_CLEANED} \n
+Let's think step by step.\n
+{example_tiled_matmul_cot} \n
+Here is an optimized verison with custom CUDA kernels: \n
+```
+{example_tiled_matmul_new}
+```\n\n
+"""
+
+    # Task
+    prompt += f"""
+Task:\n\n
+Here is an example architecture:\n\n
+```
+{ref_arch_src}
+```\n
+"""
+    prompt += PROBLEM_INSTRUCTION_CLEANED
+    return prompt
+
+
 def prompt_generate_ex_with_CoT_template(ref_arch_src: str, cot_example: str) -> str:
     """
     Generate a prompt with a CoT example following a template 
